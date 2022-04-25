@@ -1,0 +1,2 @@
+model_checkpoint_path: "Schrodinger_model-0"
+all_model_checkpoint_paths: "Schrodinger_model-0"
