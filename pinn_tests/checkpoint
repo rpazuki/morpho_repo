@@ -1,2 +1,2 @@
-model_checkpoint_path: "Schrodinger_model-0"
-all_model_checkpoint_paths: "Schrodinger_model-0"
+model_checkpoint_path: "Allen_Cahn_model-0"
+all_model_checkpoint_paths: "Allen_Cahn_model-0"
