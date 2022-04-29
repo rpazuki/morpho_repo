@@ -1,0 +1,2 @@
+model_checkpoint_path: "PINN_Turring_model-0"
+all_model_checkpoint_paths: "PINN_Turring_model-0"
