@@ -4,9 +4,10 @@
 
 
 ### For current PINNs and GPU I had to downgrade to
-1- Python 3.6
-2- Tensorflow 1.12
-3- cuda 10.2
-4- cudnn 7.2
+- Python 3.6
+- Tensorflow 1.12
+- cuda 10.2
+- cudnn 7.2
 
-
+Example: PINN vs. PDE solver
+[Turing](pinn_forward_problem/turring_sol.gif)
