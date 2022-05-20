@@ -10,4 +10,4 @@
 - cudnn 7.2
 
 Example: PINN vs. PDE solver
-[Turing](pinn_forward_problem/turring_sol.gif)
+![Turing](pinn_forward_problem/turring_sol.gif)
