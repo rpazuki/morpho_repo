@@ -1,9 +1,12 @@
 import time
+import gc
+import copy
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 
-class NN(tf.keras.layers.Layer):
+
+class NN(tf.Module):
     
     def __init__(self, layers, lb, ub, **kwargs):
         """A dense Neural Net that is specified by layers argument.
@@ -17,14 +20,15 @@ class NN(tf.keras.layers.Layer):
         self.num_layers = len(self.layers)        
         self.lb = lb
         self.ub = ub
+        self.build()
         
-    def build(self, input_shape):         
+    def build(self):         
         """Create the state of the layers (weights)"""
         weights = []
         biases = []        
         for l in range(0,self.num_layers-1):
             W = self.xavier_init(size=[self.layers[l], self.layers[l+1]])
-            b = tf.Variable(tf.zeros([1,self.layers[l+1]], dtype=tf.float64), dtype=tf.float64)
+            b = tf.Variable(tf.zeros([1,self.layers[l+1]], dtype=tf.float32), dtype=tf.float32)
             weights.append(W)
             biases.append(b)
         
@@ -37,26 +41,23 @@ class NN(tf.keras.layers.Layer):
         xavier_stddev = np.sqrt(2/(in_dim + out_dim))
         return tf.Variable(tf.compat.v1.truncated_normal([in_dim, out_dim], 
                                                          stddev=xavier_stddev, 
-                                                         dtype=tf.float64), 
-                           dtype=tf.float64)
+                                                         dtype=tf.float32), 
+                           dtype=tf.float32)
     
-    @tf.function
-    def normalise_input(self, inputs):
-        """Map the inputs to the range [-1, 1]"""
-        return 2.0*(inputs - self.lb)/(self.ub - self.lb) - 1.0
-    
+        
     @tf.function
     def __net__(self, inputs):
-        H = self.normalise_input(inputs)
+        # Map the inputs to the range [-1, 1]
+        H = 2.0*(inputs - self.lb)/(self.ub - self.lb) - 1.0
         for W, b in zip(self.Ws[:-1], self.bs[:-1]):
             H = tf.tanh(tf.add(tf.matmul(H, W), b))
             
-            W = self.Ws[-1]
-            b = self.bs[-1]
-            outputs = tf.add(tf.matmul(H, W), b)
+        W = self.Ws[-1]
+        b = self.bs[-1]
+        outputs = tf.add(tf.matmul(H, W), b)
         return outputs
     
-    def call(self, inputs, grads=True):
+    def __call__(self, inputs, grads=True):
         """Defines the computation from inputs to outputs
         
         Args:
@@ -82,14 +83,17 @@ class NN(tf.keras.layers.Layer):
         of the tensors are the same as inputs: [None, D1]
         
         """
-        X = tf.cast(inputs, tf.float64)
+        X = tf.cast(inputs, tf.float32)
         outputs = self.__net__(X)
         if grads:                        
             partials_1 = [tf.gradients(outputs[:,i], X)[0] for i in range(outputs.shape[1])]
             partials_2 = [tf.gradients(partials_1[i], X)[0] for i in range(outputs.shape[1])]
             return outputs, partials_1, partials_2            
         else:            
-            return outputs   
+            return outputs 
+        
+    def copy(self):
+        return copy.deepcopy(self)
     
     
 class Loss():
@@ -134,7 +138,7 @@ class Loss():
         """
         pass
     
-    @tf.function
+    #@tf.function
     def loss(self, batch):
         """A tensorflow function that calculates and returns the loss
         
@@ -191,14 +195,37 @@ class Loss():
 class TINN():
     """Turing-Informed Neoral Net"""
     def __init__(self,
-                 pinn,
-                 losses: Loss):
+                 pinn: NN,
+                 losses: Loss,
+                 #optimizer = keras.optimizers.SGD(learning_rate=1e-6,
+                 #                                 momentum=0.0,
+                 #                                 nesterov=False)
+                 optimizer = keras.optimizers.SGD(learning_rate=1e-6,
+                                                  momentum=0.0,
+                                                  nesterov=False),
+                 fixed_pinn = False,
+                 fixed_loss_params = False
+                ):
         self.pinn = pinn
         self.losses = losses        
-        self.optimizer_Adam = keras.optimizers.Adam()
+        #self.optimizer = keras.optimizers.Adam(epsilon=1.0)
+        self.optimizer = optimizer
+        self.fixed_pinn = fixed_pinn
+        self.fixed_loss_params = fixed_loss_params
+        self.__trainable_vars_tuple__ = None
         
-        
-    def __indices__(self, batch_size, *ns):
+    def trainable_vars(self):
+        if self.__trainable_vars_tuple__ is None:
+            self.__trainable_vars_tuple__ = ()
+            if self.fixed_pinn == False:
+                self.__trainable_vars_tuple__ += self.pinn.trainable_variables
+            if self.fixed_loss_params == False:
+                for l in self.losses:
+                    self.__trainable_vars_tuple__ += tuple(l.trainable_vars())
+            
+        return self.__trainable_vars_tuple__
+    
+    def __indices__(self, batch_size: int, *ns):
         """Generator of indices for specified sizes"""
         n1 = ns[0]
         ns_remain = ns[1:] if len(ns) > 1 else []                
@@ -206,7 +233,10 @@ class TINN():
         batch_steps = n1//batch_size
         batch_steps = batch_steps + (n1-1)//(batch_steps*batch_size)
         # remaining indices        
-        indices_batch_size = [n_i//batch_steps for n_i in ns_remain]         
+        indices_batch_size = [n_i//batch_steps for n_i in ns_remain]
+        indices_batch_size = [size + (batch_size//size)*(batch_size%size)
+                                for size in indices_batch_size]
+
         # indices
         indices = [np.array(list(range(n_i))) for n_i in ns]        
         for arr in indices:
@@ -222,16 +252,28 @@ class TINN():
             ends = [(batch+1)*size for size in indices_batch_size]                                       
             # Correction for remining indices
             if batch == batch_steps-1:
-                ends = [end if end < ns[i] else ns[i]  for i, end in enumerate(ns_remain)]
+                ends = [ns[i+1] if end != ns[i+1] else end  for i, end in enumerate(ns_remain)]
             # step's indices            
             yield [indices[0][n1_start:n1_end]] + \
-                  [indices[i+1][star:end] for i, (star, end) in enumerate(zip(starts, ends))]
+                  [indices[i+1][star:end] for i, (star, end) in enumerate(zip(starts, ends))]                
+      
                    
-    def train(self, epochs, batch_size, print_iter=10):
+    def train(self, epochs, batch_size, print_iter=10, stop_threshold = 0):
         
         datasets_sizes = [ item.data_size for item in self.losses] 
         samples_total_loss = np.zeros(epochs)
         samples_losses = np.zeros((epochs,len(self.losses)))
+        samples_params = np.zeros((epochs,
+                                   len([item.numpy()[0]                                         
+                                        for l in self.losses
+                                        for item in l.trainable_vars()])))
+        
+        #batches_list_list = [
+        #    [ l.batch(indices) 
+        #     for l, indices in zip(self.losses, indices_list)]
+        #     for indices_list in self.__indices__(batch_size, *datasets_sizes)
+        #]
+        
         
         start_time = time.time()
         for epoch in range(epochs):
@@ -240,14 +282,16 @@ class TINN():
 
             for indices_list in self.__indices__(batch_size, *datasets_sizes):
                 batches_list = [ l.batch(indices) for l, indices in zip(self.losses,indices_list)]                 
-                batch_total_loss, batch_loss_vals = self.train_step(batches_list, epoch)
+            #for batches_list in batches_list_list:
+                batch_total_loss, batch_loss_vals = self.train_step(batches_list, 
+                                                                    tf.convert_to_tensor(epoch))
                 total_loss += batch_total_loss
                 loss_vals += [l.numpy() for l in batch_loss_vals]
 
                 
-            if epoch % print_iter == 0:
+            if print_iter > 0 and (epoch == 0 or (epoch+1) % print_iter == 0):
                 elapsed = time.time() - start_time                                                                
-                print(f"Epoch: {epoch}, loss:{total_loss:.2f}\n" + \
+                print(f"Epoch: {epoch+1}, loss:{total_loss:.2f}\n" + \
                       f"\n".join([ f"{l.name}:{val:.8f} {l.trainable_vars_str()}" 
                                   for l, val in zip(self.losses, loss_vals)] ) +\
                       f"\nTime:{elapsed:.2f}\n")
@@ -255,24 +299,138 @@ class TINN():
                 
             samples_total_loss[epoch] = total_loss
             samples_losses[epoch, : ] = loss_vals
+            samples_params[epoch, : ] = [item.numpy()[0]                                         
+                                         for l in self.losses
+                                         for item in l.trainable_vars()]
+                        
+            if total_loss <= stop_threshold :
+                elapsed = time.time() - start_time
+                print("###############################################")
+                print("#           Early Stop                        #")
+                print("###############################################")
+                print(f"Epoch: {epoch+1}, loss:{total_loss:.2f}\n" + \
+                      f"\n".join([ f"{l.name}:{val:.8f} {l.trainable_vars_str()}" 
+                                  for l, val in zip(self.losses, loss_vals)] ) +\
+                      f"\nTime:{elapsed:.2f}\n")                
+                return (samples_total_loss[:epoch], samples_losses[:epoch,:], samples_params[:epoch,:]) 
+            #gc.collect()
+            #tf.keras.backend.clear_session()
             
-        return (samples_total_loss, samples_losses)
+        return (samples_total_loss, samples_losses, samples_params)
     
+    
+    
+            
     @tf.function
     def train_step(self, batches_list, iteration):        
-            
+                   
         with tf.GradientTape(persistent=False, watch_accessed_variables=True) as tape:            
             losses = []
+            batch_loss = None
             for l, batch in zip(self.losses, batches_list):
                 L = l.loss(batch)*l.loss_weight(iteration)
                 losses += [L]
+                if batch_loss is None:
+                    batch_loss = L
+                else:
+                    batch_loss = batch_loss + L 
                 
-            batch_loss = tf.reduce_sum(losses, name="Total_batch_loss")
-            
-        #grads = tape.gradient(batch_loss,  self.trainable_vars)
-        grads = tape.gradient(batch_loss,  tape.watched_variables())
-        #self.optimizer_Adam.apply_gradients(zip(grads, self.trainable_vars))
-        self.optimizer_Adam.apply_gradients(zip(grads, tape.watched_variables()))
+            #batch_loss = tf.reduce_sum(losses, name="Total_batch_loss")                                         
+        
+        grads = tape.gradient(batch_loss,  self.trainable_vars())
+        self.optimizer.apply_gradients(zip(grads, self.trainable_vars()))
         
         return batch_loss, losses
+    
+    
+    def train_experimental(self, epochs, batch_size, print_iter=10, stop_threshold = 0):
+        
+        datasets_sizes = [ item.data_size for item in self.losses] 
+        samples_total_loss = np.zeros(epochs)
+        samples_losses = np.zeros((epochs,len(self.losses)))
+        samples_params = np.zeros((epochs,
+                                   len([item.numpy()[0]                                         
+                                        for l in self.losses
+                                        for item in l.trainable_vars()])))
+        samples_grads = []#np.zeros((epochs,len(self.losses)))
+        
+        
+        start_time = time.time()
+        for epoch in range(epochs):
+            total_loss = 0
+            loss_vals = np.zeros(len(self.losses))
+            grads_vals = None#np.zeros(len(self.losses))
 
+            for indices_list in self.__indices__(batch_size, *datasets_sizes):
+                batches_list = [ l.batch(indices) for l, indices in zip(self.losses,indices_list)]                 
+                batch_total_loss, batch_loss_vals, batch_grads_vals = \
+                                       self.train_step_experimental(batches_list, 
+                                                                    tf.convert_to_tensor(epoch))
+                total_loss += batch_total_loss
+                
+                loss_vals += [l.numpy() for l in batch_loss_vals]
+                if grads_vals is None:
+                    grads_vals = np.array([np.sum(np.abs(g.numpy())) for g in batch_grads_vals
+                                          if g is not None])
+                else:
+                    grads_vals += [np.sum(np.abs(g.numpy())) for g in batch_grads_vals
+                                   if g is not None]
+                
+
+                
+            if print_iter > 0 and (epoch == 0 or (epoch+1) % print_iter == 0):
+                elapsed = time.time() - start_time                                                                
+                print(f"Epoch: {epoch+1}, loss:{total_loss:.2f}\n" + \
+                      f"\n".join([ f"{l.name}:{val:.8f} {l.trainable_vars_str()}" 
+                                  for l, val in zip(self.losses, loss_vals)] ) +\
+                      f"\nTime:{elapsed:.2f}\n")
+                start_time = time.time()
+                
+            samples_total_loss[epoch] = total_loss
+            samples_losses[epoch, : ] = loss_vals
+            #samples_grads[epoch, : ]  = grads_vals
+            samples_grads  += [grads_vals]
+            samples_params[epoch, : ] = [item.numpy()[0]                                         
+                                         for l in self.losses
+                                         for item in l.trainable_vars()]
+            
+                        
+            if total_loss <= stop_threshold :
+                elapsed = time.time() - start_time
+                print("###############################################")
+                print("#           Early Stop                        #")
+                print("###############################################")
+                print(f"Epoch: {epoch+1}, loss:{total_loss:.2f}\n" + \
+                      f"\n".join([ f"{l.name}:{val:.8f} {l.trainable_vars_str()}\n" 
+                                  for l, val in zip(self.losses, loss_vals)] ) +\
+                      f"\nTime:{elapsed:.2f}\n")                
+                return (samples_total_loss[:epoch], 
+                        samples_losses[:epoch,:], 
+                        samples_params[:epoch,:],
+                        samples_grads[:epoch,:]) 
+            gc.collect()
+            tf.keras.backend.clear_session()
+            
+        return (samples_total_loss, samples_losses, samples_params, np.array(samples_grads))
+    
+    @tf.function
+    def train_step_experimental(self, batches_list, iteration):        
+            
+        with tf.GradientTape(persistent=True, watch_accessed_variables=True) as tape:            
+            losses = []
+            batch_loss = None
+            for l, batch in zip(self.losses, batches_list):
+                L = l.loss(batch)*l.loss_weight(iteration)
+                losses += [L]
+                if batch_loss is None:
+                    batch_loss = L
+                else:
+                    batch_loss = batch_loss + L 
+                
+            #batch_loss = tf.reduce_sum(losses, name="Total_batch_loss")                    
+        
+        grads = tape.gradient(batch_loss,  self.trainable_vars())
+        grads_parts = [tape.gradient(L,  self.trainable_vars()) for L in losses]        
+        self.optimizer.apply_gradients(zip(grads, self.trainable_vars()))
+        
+        return batch_loss, losses, grads_parts[0]#[tf.reduce_sum(g) for g in grads_parts]
