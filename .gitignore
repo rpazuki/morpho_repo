@@ -3,3 +3,7 @@
 *.log
 pinn_backward_problem/models_repo
 pinn_backward_problem/models_repo/**
+**/*.npy
+**/outputs
+**/*.pyc
+**/__pycache__
