@@ -36,7 +36,7 @@ class Periodic_boundary(Loss):
         boundary_LB_pred = self.pinn(inputs_LB, grads = False)
         boundary_RT_pred = self.pinn(inputs_RT, grads = False)
         L = tf.reduce_sum(tf.square(boundary_LB_pred - boundary_RT_pred), 
-                          name = self.name)
+                          name = self.name)        
         return L
     
 class Truing_PDE(Loss):

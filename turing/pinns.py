@@ -117,7 +117,7 @@ class Loss():
         self.pinn = pinn
         self.data_size = data_size
         self.name = name      
-        self.loss_weight = init_loss_weight
+        self.loss_weight = tf.Variable(init_loss_weight, trainable=False, name=f"{name}__loss_weight")
     
     
     def batch(self, indices):
@@ -153,6 +153,7 @@ class Loss():
               ouput_1 = self.pinn(input_1)
               ouput_2 = self.pinn(input_2)
               L = tf.reduce_sum(tf.square(output_1 - output_1), name=self.name)
+              self.L = L
               return L
         
         """
@@ -190,7 +191,7 @@ class Loss():
         if type(val) is float:
             return val
         else:
-            return val[0]
+            return val[0]        
 
 class TINN():
     """Turing-Informed Neural Net"""
@@ -213,6 +214,7 @@ class TINN():
         self.fixed_pinn = fixed_pinn
         self.fixed_loss_params = fixed_loss_params
         self.__trainable_vars_tuple__ = None
+        self.warmed_up = False
         
     def trainable_vars(self):
         if self.__trainable_vars_tuple__ is None:
@@ -264,7 +266,7 @@ class TINN():
             losses = []
             batch_loss = None
             for l, batch in zip(self.losses, batches_list):
-                L = l.loss(batch)*l.loss_weight#*l.loss_weight(iteration)
+                L = l.loss(batch)*l.loss_weight#*l.loss_weight(iteration)    
                 losses += [L]
                 if batch_loss is None:
                     batch_loss = L
@@ -279,13 +281,24 @@ class TINN():
         return batch_loss, losses
     
     @tf.function
+    def parameter_gradiants(self, full_batches):        
+        grads_parts = [tf.gradients(l.loss(batch),  self.trainable_vars()) 
+                           for l, batch in zip(self.losses, full_batches)] 
+        grads_parts = [tf.math.reduce_mean([0.0 if v is None else tf.math.reduce_mean(tf.math.abs(v)) 
+                            for v in g_part
+                       ]) 
+                            for g_part in grads_parts
+                      ] 
+        return grads_parts
+    
+    @tf.function
     def train_step_gradiants(self, batches_list, iteration):        
             
         with tf.GradientTape(persistent=True, watch_accessed_variables=True) as tape:            
             losses = []
             batch_loss = None
             for l, batch in zip(self.losses, batches_list):
-                L = l.loss(batch)*l.loss_weight#*l.loss_weight(iteration)
+                L = l.loss(batch)*l.loss_weight#*l.loss_weight(iteration)                
                 losses += [L]
                 if batch_loss is None:
                     batch_loss = L
@@ -293,16 +306,79 @@ class TINN():
                     batch_loss = batch_loss + L 
                 
             #batch_loss = tf.reduce_sum(losses, name="Total_batch_loss")                    
-        
+        grads_parts = [tape.gradient(L,  self.trainable_vars()) for L in losses] 
+        grads_parts = [[0.0 if v is None else v for v in g_part] for g_part in grads_parts] 
+        #
         grads = tape.gradient(batch_loss,  self.trainable_vars())
         self.optimizer.apply_gradients(zip(grads, self.trainable_vars()))
         #
-        grads_parts = [tape.gradient(L,  self.trainable_vars()) for L in losses] 
-        grads_parts = [[0.0 if v is None else v for v in g_part] for g_part in grads_parts] 
+        
+        
+        #zero_c = tf.constant([0.0], dtype=tf.float32)        
+        
+        #grads_parts = [tape.gradient(L,  self.trainable_vars()) for L in losses]
+        #loss_size = len(grads_parts)
+        #vars_size = len(grads_parts[0])
+        # sums gradiants along losses, each with same shape as self.trainable_vars()
+        #grads = [tf.reduce_sum( [grads_parts[row][col] if grads_parts[row][col] is not None else zero_c
+        #            for row in range(loss_size)], axis=0) 
+        #               for col in range(vars_size)
+        #        ]        
+        #self.optimizer.apply_gradients(zip(grads, self.trainable_vars()))        
+        #grads_parts = [[0.0 if v is None else v for v in g_part] for g_part in grads_parts] 
                 
         return batch_loss, losses, grads_parts    
 
-      
+    def _train_batch_experimental_(self, 
+                                   epoch, 
+                                   batch_size,
+                                   datasets_sizes,
+                                   init_warmup,
+                                   observation_index,
+                                   pde_index,
+                                   gradient_ratio,
+                                   loss_update_ratio):
+        
+        total_loss = 0
+        loss_vals = np.zeros(len(self.losses))                
+        
+                
+        for indices_list in self.__indices__(batch_size, *datasets_sizes):
+            batches_list = [ l.batch(indices) for l, indices in zip(self.losses,indices_list)]                 
+            batch_total_loss, batch_loss_vals = self.train_step(batches_list, 
+                                                                tf.convert_to_tensor(epoch))
+            total_loss += batch_total_loss
+            loss_vals += [l.numpy() for l in batch_loss_vals]
+                    
+        obs_L = loss_vals[observation_index]
+        pde_L = loss_vals[pde_index] 
+        
+        @tf.function
+        def update_weights():
+            full_batches = [ l.batch(list(range(n))) for l,n in zip(self.losses, datasets_sizes) ] 
+            grads_parts = self.parameter_gradiants(full_batches)
+            obs = self.losses[observation_index]
+            #print("it: ", epoch)
+            #if f:
+            #    print(obs.loss_weight, grads_parts[observation_index].numpy(), grads_parts[pde_index].numpy())
+            #else:
+            #    print(obs.loss_weight.numpy(), grads_parts[observation_index].numpy(), grads_parts[pde_index].numpy())
+            #print(obs_L, pde_L, obs_L/pde_L)
+            obs.loss_weight.assign(gradient_ratio*grads_parts[pde_index]/grads_parts[observation_index])
+            
+        # The first update
+        if epoch >= init_warmup and self.warmed_up == False:
+            self.warmed_up = True
+            update_weights()
+            
+        # Next updates
+        if self.warmed_up and obs_L/pde_L <= loss_update_ratio:
+            update_weights()
+            
+        
+                
+        return (total_loss, loss_vals)
+        
     def _train_batch_(self, 
                       epoch, 
                       batch_size,
@@ -317,18 +393,30 @@ class TINN():
         
         def grad_accumulation(batch_grads_vals):
             #  | nabla_{theta} |
-            if self.grads_vals is None:                    
+            if self.grads_vals is None:                
                 self.grads_vals = np.abs(np.array(batch_grads_vals))
             else:
                 self.grads_vals += np.abs(np.array(batch_grads_vals))
                 
+                
+        full_batches = [ l.batch(list(range(n))) for l,n in zip(self.losses, datasets_sizes) ]        
         def update_loss_weigths():
             # E[| nabla_{theta} |]
-            grads_reg = np.array([np.mean([np.mean(v.numpy()) for v in L]) for L in self.grads_vals])
+            #grads_reg = np.array([np.mean([np.mean(v.numpy()) for v in L]) for L in self.grads_vals])
+            #for i, l in enumerate(self.losses[1:]):
+            #    # Moving average withe exponential decay                
+            #    # (0.5^epoch)*l.loss_weight
+            #    l.loss_weight = (1-.5)*(grads_reg[0]/grads_reg[i+1])*self.losses[0].loss_weight + 0.5*l.loss_weight
+            
+            grads_reg = np.array(self.parameter_gradiants(full_batches))
+            #print(grads_reg)
             for i, l in enumerate(self.losses[1:]):
                 # Moving average withe exponential decay                
                 # (0.5^epoch)*l.loss_weight
-                l.loss_weight = (1-.5)*(grads_reg[0]/grads_reg[i+1])*self.losses[0].loss_weight + 0.5*l.loss_weight
+                #l.loss_weight = (1-.5)*(grads_reg[0]/grads_reg[i+1])*self.losses[0].loss_weight + 0.5*l.loss_weight
+                l.loss_weight = (grads_reg[0]/grads_reg[i+1])*self.losses[0].loss_weight
+                
+            #print([l.loss_weight for l in self.losses])
 
         for indices_list in self.__indices__(batch_size, *datasets_sizes):
             batches_list = [ l.batch(indices) for l, indices in zip(self.losses,indices_list)]                 
@@ -338,11 +426,11 @@ class TINN():
                                                              tf.convert_to_tensor(epoch))
                 grad_accumulation(batch_grads_vals)
                     
-            elif regularised and epoch%regularisation_freq == 0:
-                batch_total_loss, batch_loss_vals, batch_grads_vals = \
-                                   self.train_step_gradiants(batches_list, 
-                                                             tf.convert_to_tensor(epoch))
-                grad_accumulation(batch_grads_vals)
+            #elif regularised and epoch%regularisation_freq == 0:
+            #    batch_total_loss, batch_loss_vals, batch_grads_vals = \
+            #                       self.train_step_gradiants(batches_list, 
+            #                                                 tf.convert_to_tensor(epoch))
+            #    grad_accumulation(batch_grads_vals)
             else:
                 batch_total_loss, batch_loss_vals = self.train_step(batches_list, 
                                                                 tf.convert_to_tensor(epoch))
@@ -357,6 +445,86 @@ class TINN():
         else:
             return (total_loss, loss_vals, None)
         
+    def train_experimental(self, 
+                           epochs, 
+                           batch_size, 
+                           print_iter=10, 
+                           sample_stats = False,
+                           sample_params = False,
+                           init_warmup = 100,
+                           observation_index = 0,
+                           pde_index = 1,
+                           observation_error_threshold = 1e-4,
+                           gradient_ratio = 10,
+                           loss_update_ratio=1.2):
+                
+        obs_n = self.losses[observation_index].inputs_obs.shape[0]
+        
+        datasets_sizes = [ item.data_size for item in self.losses] 
+        
+        if sample_stats:
+            samples_losses = np.zeros((epochs,len(self.losses)))
+        else:
+            samples_total_loss = None
+            samples_losses = None
+        if sample_params:
+            samples_params = np.zeros((epochs,
+                                      len([item.numpy()[0]                                         
+                                           for l in self.losses
+                                           for item in l.trainable_vars()])))
+        else:
+            samples_params = None
+        
+        
+        
+        start_time = time.time()
+        for epoch in range(epochs):
+            total_loss, loss_vals = self._train_batch_experimental_(epoch, 
+                                                                    batch_size,
+                                                                    datasets_sizes,
+                                                                    init_warmup,
+                                                                    observation_index,
+                                                                    pde_index,
+                                                                    gradient_ratio,
+                                                                    loss_update_ratio)
+            
+                
+                
+            if print_iter > 0 and (epoch == 0 or (epoch+1) % print_iter == 0):
+                elapsed = time.time() - start_time                                                                
+                print(f"Epoch: {epoch+1}, loss:{total_loss:.2f}\n" + \
+                      f"\n".join([ f"{l.name}:{val:.8f} {l.trainable_vars_str()}" 
+                                  for l, val in zip(self.losses, loss_vals)] ) +\
+                      f"\nTime:{elapsed:.2f}\n")
+                start_time = time.time()
+                
+            if sample_stats:
+                samples_losses[epoch, :] = loss_vals
+            if sample_params:
+                samples_params[epoch, :] = [item.numpy()[0]                                         
+                                            for l in self.losses
+                                            for item in l.trainable_vars()]
+            obs_loss = loss_vals[observation_index] 
+            
+            if obs_loss/(obs_n*loss_update_ratio) <= observation_error_threshold:
+                elapsed = time.time() - start_time
+                print("###############################################")
+                print("#           Early Stop                        #")
+                print("###############################################")
+                print(f"Epoch: {epoch+1}, loss:{total_loss:.2f}\n" + \
+                      f"observation loss:{obs_loss:.2f}, per data point:{obs_loss/(obs_n*loss_update_ratio):.8f}\n" + \
+                      f"\n".join([ f"{l.name}:{val:.8f} {l.trainable_vars_str()}" 
+                                  for l, val in zip(self.losses, loss_vals)] ) +\
+                      f"\nTime:{elapsed:.2f}\n")
+                return (samples_losses[:epoch,:] if sample_stats else None, 
+                        samples_params[:epoch,:] if sample_params else None)
+            
+                
+                
+            gc.collect()
+            tf.keras.backend.clear_session()
+            
+        return (samples_losses, samples_params)    
     
     def train(self, 
               epochs, 
@@ -384,25 +552,16 @@ class TINN():
             samples_params = None
         
         samples_grads = None
-        sample_ws = np.zeros(epochs)
-        
         
         start_time = time.time()
         for epoch in range(epochs):
-            if sample_gradiants:
-                total_loss, loss_vals, grads_vals = self._train_batch_(epoch, 
-                                                                       batch_size,
-                                                                       datasets_sizes,
-                                                                       True, 
-                                                                       regularised,
-                                                                       regularisation_freq)
-            else:
-                total_loss, loss_vals, _ =  self._train_batch_(epoch, 
-                                                               batch_size,
-                                                               datasets_sizes,
-                                                               False,
-                                                               regularised,
-                                                               regularisation_freq )
+            total_loss, loss_vals, grads_vals = self._train_batch_(epoch, 
+                                                                   batch_size,
+                                                                   datasets_sizes,
+                                                                   sample_gradiants, 
+                                                                   regularised,
+                                                                   regularisation_freq)
+            
                 
                 
             if print_iter > 0 and (epoch == 0 or (epoch+1) % print_iter == 0):
@@ -426,8 +585,7 @@ class TINN():
                 samples_grads = np.zeros((epochs, g.shape[0], g.shape[1]))
                 samples_grads[epoch]  = g
             elif sample_gradiants:
-                samples_grads[epoch]  = np.array([[np.sum(v.numpy()) for v in L] for L in grads_vals])
-            sample_ws[epoch] = self.losses[1].loss_weight
+                samples_grads[epoch]  = np.array([[np.sum(v.numpy()) for v in L] for L in grads_vals])            
                         
             if total_loss <= stop_threshold :
                 elapsed = time.time() - start_time
@@ -447,4 +605,4 @@ class TINN():
             gc.collect()
             tf.keras.backend.clear_session()
             
-        return (samples_losses, samples_params, samples_grads, sample_ws)    
+        return (samples_losses, samples_params, samples_grads)    
