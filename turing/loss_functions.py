@@ -39,7 +39,7 @@ class Periodic_boundary(Loss):
                           name = self.name)        
         return L
     
-class Truing_PDE(Loss):
+class Turing_PDE(Loss):
     def __init__(self, pinn, inputs_pde, name="Loss_Turing_PDE", init_loss_weight = 1.0):        
         self.inputs_pde = inputs_pde
         super().__init__(pinn, name ,inputs_pde.shape[0], init_loss_weight)
@@ -47,7 +47,7 @@ class Truing_PDE(Loss):
     def batch(self, indices):
         return tf.convert_to_tensor(self.inputs_pde[indices])
        
-    #@tf.function
+    @tf.function
     def loss(self, batch):
         inputs = batch
         pde_outputs, partials_1, partials_2 = self.pinn(inputs, grads = True)
@@ -59,7 +59,7 @@ class Truing_PDE(Loss):
     def pde(self, outputs, partials_1, partials_2):
         pass
     
-class ASDM(Truing_PDE):
+class ASDM(Turing_PDE):
     def __init__(self, 
                  pinn, 
                  inputs_pde, 
@@ -133,3 +133,146 @@ class ASDM(Truing_PDE):
         
         return tf.concat([tf.expand_dims(f_a, axis=1), 
                           tf.expand_dims(f_s, axis=1)], axis = 1)
+    
+class schnakenberg(Turing_PDE):
+    def __init__(self, 
+                 pinn, 
+                 inputs_pde, 
+                 init_loss_weight = 1.0,
+                 D_u = 10.0,
+                 D_v = 10.0,
+                 c_0 = 10.0,
+                 c_1 = 10.0,
+                 c_2 = 10.0                 
+                ):
+        super().__init__(pinn, inputs_pde, name="Loss_Schnakenberg", init_loss_weight= init_loss_weight)
+        
+        self.D_u = tf.Variable([D_u], dtype=tf.float32,
+                                   name="D_u",
+                                   constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        self.D_v = tf.Variable([D_v], dtype=tf.float32,
+                                   name="D_v",
+                                   constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        self.c_0 = tf.Variable([c_0], dtype=tf.float32,
+                                   name="c_0",
+                                   constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        self.c_1 = tf.Variable([c_1], dtype=tf.float32, 
+                                   name="c_1",
+                                   constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        self.c_2 = tf.Variable([c_2], dtype=tf.float32, 
+                                name="c_2",
+                                constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        
+        
+        
+    def trainable_vars(self):
+        return [self.D_u,
+                self.D_v,
+                self.c_0,
+                self.c_1,                
+                self.c_2]
+        
+    def pde(self, outputs, partials_1, partials_2):
+        u = outputs[:, 0]
+        v = outputs[:, 1]
+        
+        u_x = partials_1[0][:, 0]
+        u_y = partials_1[0][:, 1]
+        u_t = partials_1[0][:, 2]
+        
+        u_xx = partials_2[0][:, 0]
+        u_yy = partials_2[0][:, 1]
+        
+        
+        v_x = partials_1[1][:, 0]
+        v_y = partials_1[1][:, 1]
+        v_t = partials_1[1][:, 2]
+        
+        v_xx = partials_2[1][:, 0]
+        v_yy = partials_2[1][:, 1]
+        
+        D_u = self.D_u
+        D_v = self.D_v
+        c_0 = self.c_0
+        c_1 = self.c_1
+        c_2 = self.c_2
+               
+        
+        u2v = u*u*v
+        f_u = u_t - D_u*(u_xx + u_yy) - c_1 + c_0*u -  u2v
+        f_v = v_t - D_v*(v_xx + v_yy) - c_2 + u2v
+        
+        return tf.concat([tf.expand_dims(f_u, axis=1), 
+                          tf.expand_dims(f_v, axis=1)], axis = 1)    
+    
+class schnakenberg2(Turing_PDE):
+    def __init__(self, 
+                 pinn, 
+                 inputs_pde, 
+                 init_loss_weight = 1.0,
+                 #D_u = 10.0,
+                 #D_v = 10.0,
+                 c_0 = 10.0#,
+                 #c_1 = 10.0,
+                 #c_2 = 10.0                 
+                ):
+        super().__init__(pinn, inputs_pde, name="Loss_Schnakenberg", init_loss_weight= init_loss_weight)
+        
+        #self.D_u = tf.Variable([D_u], dtype=tf.float32,
+        #                           name="D_u",
+        #                           constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        #self.D_v = tf.Variable([D_v], dtype=tf.float32,
+        #                           name="D_v",
+        #                           constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        self.c_0 = tf.Variable([c_0], dtype=tf.float32,
+                                   name="c_0",
+                                   constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+#         self.c_1 = tf.Variable([c_1], dtype=tf.float32, 
+#                                    name="c_1",
+#                                    constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+#         self.c_2 = tf.Variable([c_2], dtype=tf.float32, 
+#                                 name="c_2",
+#                                 constraint= lambda z: tf.clip_by_value(z, 0, 1e10))
+        
+        
+        
+    def trainable_vars(self):
+        return [#self.D_u,
+                #self.D_v,
+                self.c_0,
+                #self.c_1,                
+                #self.c_2
+               ]
+        
+    def pde(self, outputs, partials_1, partials_2):
+        u = outputs[:, 0]
+        v = outputs[:, 1]
+        
+        u_x = partials_1[0][:, 0]
+        u_y = partials_1[0][:, 1]
+        u_t = partials_1[0][:, 2]
+        
+        u_xx = partials_2[0][:, 0]
+        u_yy = partials_2[0][:, 1]
+        
+        
+        v_x = partials_1[1][:, 0]
+        v_y = partials_1[1][:, 1]
+        v_t = partials_1[1][:, 2]
+        
+        v_xx = partials_2[1][:, 0]
+        v_yy = partials_2[1][:, 1]
+        
+        #D_u = self.D_u
+        #D_v = self.D_v
+        c_0 = self.c_0
+        #c_1 = self.c_1
+        #c_2 = self.c_2
+               
+        
+        u2v = u*u*v
+        f_u = u_t - 1.0*(u_xx + u_yy) - 0.1 + c_0*u -  u2v
+        f_v = v_t - 40.0*(v_xx + v_yy) - 0.9 + u2v
+        
+        return tf.concat([tf.expand_dims(f_u, axis=1), 
+                          tf.expand_dims(f_v, axis=1)], axis = 1)

@@ -259,6 +259,8 @@ class TINN():
             yield [indices[0][n1_start:n1_end]] + \
                   [indices[i+1][star:end] for i, (star, end) in enumerate(zip(starts, ends))]
             
+    
+    
     @tf.function
     def train_step(self, batches_list, iteration):        
                    
@@ -399,8 +401,9 @@ class TINN():
                 self.grads_vals += np.abs(np.array(batch_grads_vals))
                 
                 
-        full_batches = [ l.batch(list(range(n))) for l,n in zip(self.losses, datasets_sizes) ]        
+        
         def update_loss_weigths():
+            full_batches = [ l.batch(list(range(n))) for l,n in zip(self.losses, datasets_sizes) ]        
             # E[| nabla_{theta} |]
             #grads_reg = np.array([np.mean([np.mean(v.numpy()) for v in L]) for L in self.grads_vals])
             #for i, l in enumerate(self.losses[1:]):
@@ -603,6 +606,6 @@ class TINN():
                 
                 
             gc.collect()
-            tf.keras.backend.clear_session()
+            #tf.keras.backend.clear_session()
             
         return (samples_losses, samples_params, samples_grads)    
