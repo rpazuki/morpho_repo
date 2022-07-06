@@ -93,6 +93,7 @@ class TINN_multi_nodes():
         if sample_losses:
             arr_loss_total = np.zeros(epochs)
             arr_loss_regularisd_total = np.zeros(epochs)
+            arr_obs_acc = np.zeros(epochs)
             arr_loss_obs = np.zeros((epochs, self.nodes_n))
             arr_loss_pde = np.zeros((epochs, self.nodes_n))
         if sample_regularisations:
@@ -104,7 +105,7 @@ class TINN_multi_nodes():
 
         #
         def fill_return():
-            ret = {}
+            ret = {'training_obs_accuracy': arr_obs_acc}
             if sample_losses:
                 ret = {**ret,
                        **{'loss_total': arr_loss_total,
@@ -160,6 +161,8 @@ class TINN_multi_nodes():
                 loss_obs += loss_obs_batch.numpy()
                 loss_pde += loss_pde_batch.numpy()
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
+            train_acc = self.train_acc_metric.result()
+            arr_obs_acc[epoch] = train_acc
             if sample_losses:
                 arr_loss_total[epoch] = loss_total
                 arr_loss_regularisd_total[epoch] = loss_reg_total
@@ -176,7 +179,6 @@ class TINN_multi_nodes():
                 arr_grads_obs[epoch, :] = [np.sqrt(item.numpy()) for item in self.grad_norms[:self.nodes_n]]
                 arr_grads_pde[epoch, :] = [np.sqrt(item.numpy()) for item in self.grad_norms[self.nodes_n:]]
 
-            train_acc = self.train_acc_metric.result()
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 print(f"Training observations acc over epoch: {train_acc:{self.print_precision}}")
