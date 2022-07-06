@@ -18,6 +18,10 @@ def lower_upper_bounds(inputs_of_inputs):
     return lb, ub
 
 def indice(batch_size: int, shuffle: bool = True, *ns):
+    """For old code"""
+    return indices(batch_size, shuffle, *ns)
+
+def indices(batch_size: int, shuffle: bool = True, *ns):
     """Generator of indices for specified sizes"""
     n1 = ns[0]
     ns_remain = ns[1:] if len(ns) > 1 else []                
