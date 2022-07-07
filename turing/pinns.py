@@ -29,7 +29,8 @@ class NN(tf.Module):
         biases = []
         for i in range(0, self.num_layers - 1):
             W = self.xavier_init(size=[self.layers[i], self.layers[i + 1]])
-            b = tf.Variable(tf.zeros([1, self.layers[i + 1]], dtype=self.dtype), dtype=self.dtype)
+            b = tf.Variable(
+                tf.zeros([1, self.layers[i + 1]], dtype=self.dtype), dtype=self.dtype)
             weights.append(W)
             biases.append(b)
 
@@ -92,8 +93,10 @@ class NN(tf.Module):
                   of the tensors are the same as inputs: [None, D1]
 
         """
-        partials_1 = [tf.gradients(outputs[:, i], inputs)[0] for i in range(outputs.shape[1])]
-        partials_2 = [tf.gradients(partials_1[i], inputs)[0] for i in range(outputs.shape[1])]
+        partials_1 = [tf.gradients(outputs[:, i], inputs)[0]
+                      for i in range(outputs.shape[1])]
+        partials_2 = [tf.gradients(partials_1[i], inputs)[0]
+                      for i in range(outputs.shape[1])]
         return partials_1, partials_2
 
     def gradients_tape(self, inputs, outputs, tape):
@@ -116,7 +119,8 @@ class NN(tf.Module):
                   of the tensors is the same as inputs: [None, D1]
 
         """
-        partials = [tape.gradient(outputs[i], inputs) for i in range(len(outputs))]
+        partials = [tape.gradient(outputs[i], inputs)
+                    for i in range(len(outputs))]
         return partials
 
     def copy(self):
@@ -135,7 +139,7 @@ class Loss():
         self.print_precision = print_precision
 
     # @tf.function
-    def pde(self, pinn, x):
+    def loss(self, pinn, x):
         """A tensorflow function that calculates and returns the loss
 
         Args:
@@ -160,9 +164,13 @@ class Loss():
 
     def trainables_str(self):
         s = ""
+        CR = "\n"
+        C = ""
         t_vars = self.trainables()
         if len(t_vars) > 0:
-            s += ", ".join([f"{v.name}: {self.__get_val__(v):{self.print_precision}}" for v in t_vars])
+            s += "".join(
+                [f"{v.name.split(':')[0]}: {self.__get_val__(v):{self.print_precision}} {CR if (i+1)%4 == 0 else C}"
+                 for i, v in enumerate(t_vars)])
         return s
 
     def __get_val__(self, item):
@@ -175,15 +183,19 @@ class Loss():
 
 class TINN():
     """Turing-Informed Neural Net"""
+
     def __init__(self,
                  pinn: NN,
                  pde_loss: Loss,
+                 extra_loss=[],
                  optimizer=keras.optimizers.Adam(),
                  train_acc_metric=keras.metrics.MeanSquaredError(),
                  alpha=0.5,
                  print_precision=".5f"):
         self.pinn = pinn
         self.pde_loss = pde_loss
+        self.extra_loss = extra_loss
+        self.extra_loss_len = len(extra_loss)
         self.optimizer = optimizer
         self.train_acc_metric = train_acc_metric
         self.alpha = alpha
@@ -194,38 +206,60 @@ class TINN():
         self.lambda_pde_u = tf.Variable(1., dtype=pinn.dtype, trainable=False)
         self.lambda_pde_v = tf.Variable(1., dtype=pinn.dtype, trainable=False)
 
-        self.grad_norm_obs_u = tf.Variable(0., dtype=pinn.dtype, trainable=False)
-        self.grad_norm_obs_v = tf.Variable(0., dtype=pinn.dtype, trainable=False)
-        self.grad_norm_pde_u = tf.Variable(0., dtype=pinn.dtype, trainable=False)
-        self.grad_norm_pde_v = tf.Variable(0., dtype=pinn.dtype, trainable=False)
+        self.grad_norm_obs_u = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
+        self.grad_norm_obs_v = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
+        self.grad_norm_pde_u = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
+        self.grad_norm_pde_v = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
 
-        self.loss_norm_obs_u = tf.Variable(0., dtype=pinn.dtype, trainable=False)
-        self.loss_norm_obs_v = tf.Variable(0., dtype=pinn.dtype, trainable=False)
-        self.loss_norm_pde_u = tf.Variable(0., dtype=pinn.dtype, trainable=False)
-        self.loss_norm_pde_v = tf.Variable(0., dtype=pinn.dtype, trainable=False)
+        self.loss_norm_obs_u = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
+        self.loss_norm_obs_v = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
+        self.loss_norm_pde_u = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
+        self.loss_norm_pde_v = tf.Variable(
+            0., dtype=pinn.dtype, trainable=False)
 
     @tf.function
     def __train_step__(self, x, y, update_lambdas, first_step, last_step):
         with tf.GradientTape(persistent=True) as tape:
-            outputs, f_u, f_v = self.pde_loss.pde(self.pinn, x)
+            outputs, f_u, f_v = self.pde_loss.loss(self.pinn, x)
             loss_obs_u = tf.reduce_mean(tf.square(y[:, 0] - outputs[:, 0]))
             loss_obs_v = tf.reduce_mean(tf.square(y[:, 1] - outputs[:, 1]))
             loss_pde_u = tf.reduce_mean(tf.square(f_u))
             loss_pde_v = tf.reduce_mean(tf.square(f_v))
+            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            if self.extra_loss_len > 0:
+                loss_extra_items = [extra_loss.loss(
+                    self.pinn, x) for extra_loss in self.extra_loss]
+                for extra_loss in self.extra_loss:
+                    trainables += extra_loss.trainables()
+                loss_extra = tf.reduce_sum(loss_extra_items)
+            else:
+                loss_extra_items = []
+                loss_extra = 0.0
 
             loss_value = self.lambda_obs_u * loss_obs_u + self.lambda_obs_v * loss_obs_v + \
-                self.lambda_pde_u * loss_pde_u + self.lambda_pde_v * loss_pde_v
+                self.lambda_pde_u * loss_pde_u + self.lambda_pde_v * loss_pde_v + loss_extra
 
         if update_lambdas:
-            grad_obs_u = tape.gradient(loss_obs_u, self.pinn.trainable_variables + self.pde_loss.trainables())
-            grad_obs_v = tape.gradient(loss_obs_v, self.pinn.trainable_variables + self.pde_loss.trainables())
-            grad_pde_u = tape.gradient(loss_pde_u, self.pinn.trainable_variables + self.pde_loss.trainables())
-            grad_pde_v = tape.gradient(loss_pde_v, self.pinn.trainable_variables + self.pde_loss.trainables())
+            grad_obs_u = tape.gradient(loss_obs_u, trainables)
+            grad_obs_v = tape.gradient(loss_obs_v, trainables)
+            grad_pde_u = tape.gradient(loss_pde_u, trainables)
+            grad_pde_v = tape.gradient(loss_pde_v, trainables)
 
-            temp_1 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_u])
-            temp_2 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_v])
-            temp_3 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_u])
-            temp_4 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_v])
+            temp_1 = tf.reduce_sum(
+                [tf.reduce_sum(tf.square(item)) for item in grad_obs_u])
+            temp_2 = tf.reduce_sum(
+                [tf.reduce_sum(tf.square(item)) for item in grad_obs_v])
+            temp_3 = tf.reduce_sum(
+                [tf.reduce_sum(tf.square(item)) for item in grad_pde_u])
+            temp_4 = tf.reduce_sum(
+                [tf.reduce_sum(tf.square(item)) for item in grad_pde_v])
 
             if first_step:
                 self.grad_norm_obs_u.assign(temp_1)
@@ -256,15 +290,19 @@ class TINN():
                 w_4 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_v)
 
                 w_total = w_1 + w_2 + w_3 + w_4
-                self.lambda_obs_u.assign(self.alpha * self.lambda_obs_u + ((1 - self.alpha) * 4.0 * w_1) / w_total)
-                self.lambda_obs_v.assign(self.alpha * self.lambda_obs_v + ((1 - self.alpha) * 4.0 * w_2) / w_total)
-                self.lambda_pde_u.assign(self.alpha * self.lambda_pde_u + ((1 - self.alpha) * 4.0 * w_3) / w_total)
-                self.lambda_pde_v.assign(self.alpha * self.lambda_pde_v + ((1 - self.alpha) * 4.0 * w_4) / w_total)
+                self.lambda_obs_u.assign(
+                    self.alpha * self.lambda_obs_u + ((1 - self.alpha) * 4.0 * w_1) / w_total)
+                self.lambda_obs_v.assign(
+                    self.alpha * self.lambda_obs_v + ((1 - self.alpha) * 4.0 * w_2) / w_total)
+                self.lambda_pde_u.assign(
+                    self.alpha * self.lambda_pde_u + ((1 - self.alpha) * 4.0 * w_3) / w_total)
+                self.lambda_pde_v.assign(
+                    self.alpha * self.lambda_pde_v + ((1 - self.alpha) * 4.0 * w_4) / w_total)
 
-        grads = tape.gradient(loss_value, self.pinn.trainable_variables + self.pde_loss.trainables())
-        self.optimizer.apply_gradients(zip(grads, self.pinn.trainable_variables + self.pde_loss.trainables()))
+        grads = tape.gradient(loss_value, trainables)
+        self.optimizer.apply_gradients(zip(grads, trainables))
         self.train_acc_metric.update_state(y, outputs)
-        return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v
+        return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, loss_extra_items
 
     def train(self,
               epochs,
@@ -287,6 +325,8 @@ class TINN():
             arr_loss_obs_v = np.zeros(epochs)
             arr_loss_pde_u = np.zeros(epochs)
             arr_loss_pde_v = np.zeros(epochs)
+            if self.extra_loss_len > 0:
+                arr_loss_extra = np.zeros((epochs, self.extra_loss_len))
         if sample_regularisations:
             arr_lambda_obs_u = np.zeros(epochs)
             arr_lambda_obs_v = np.zeros(epochs)
@@ -309,6 +349,9 @@ class TINN():
                           'loss_pde_u': arr_loss_pde_u,
                           'loss_pde_v': arr_loss_pde_v}
                        }
+                if self.extra_loss_len > 0:
+                    for i, loss in enumerate(self.extra_loss):
+                        ret[f"loss_extra_{loss.name}"] = arr_loss_extra[:, i]
             if sample_regularisations:
                 ret = {**ret,
                        **{'lambda_obs_u': arr_lambda_obs_u,
@@ -336,28 +379,31 @@ class TINN():
                 print(f"\nStart of epoch {epoch:d}")
 
             loss_total, loss_reg_total, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v = 0, 0, 0, 0, 0, 0
-
+            loss_extra = np.zeros(self.extra_loss_len)
             # Iterate over the batches of the dataset.
             for step, o_batch_indices in enumerate(indices(batch_size, shuffle, X_size)):
                 x_batch_train, y_batch_train = X[o_batch_indices], Y[o_batch_indices]
 
-                loss_value_batch, loss_obs_u_batch, loss_obs_v_batch, loss_pde_u_batch, loss_pde_v_batch = \
-                    self.__train_step__(x_batch_train,
-                                        y_batch_train,
-                                        True,
-                                        step == 0,
-                                        step == last_step)
+                loss_value_batch,\
+                    loss_obs_u_batch, loss_obs_v_batch, loss_pde_u_batch, loss_pde_v_batch,\
+                    loss_extra_batch = self.__train_step__(x_batch_train,
+                                                           y_batch_train,
+                                                           True,
+                                                           step == 0,
+                                                           step == last_step)
 
                 if step > last_step:
                     last_step = step
 
                 loss_reg_total += loss_value_batch
                 loss_total += (loss_obs_u_batch / last_lambda_obs_u) + (loss_obs_v_batch / last_lambda_obs_v) +\
-                              (loss_pde_u_batch / last_lambda_pde_u) + (loss_pde_v_batch / last_lambda_pde_v)
+                              (loss_pde_u_batch / last_lambda_pde_u) + \
+                    (loss_pde_v_batch / last_lambda_pde_v)
                 loss_obs_u += loss_obs_u_batch
                 loss_obs_v += loss_obs_v_batch
                 loss_pde_u += loss_pde_u_batch
                 loss_pde_v += loss_pde_v_batch
+                loss_extra += [item.numpy() for item in loss_extra_batch]
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             train_acc = self.train_acc_metric.result()
             arr_obs_acc[epoch] = train_acc
@@ -368,6 +414,8 @@ class TINN():
                 arr_loss_obs_v[epoch] = loss_obs_v
                 arr_loss_pde_u[epoch] = loss_pde_u
                 arr_loss_pde_v[epoch] = loss_pde_v
+                if self.extra_loss_len > 0:
+                    arr_loss_extra[epoch, :] = loss_extra
 
             last_lambda_obs_u = self.lambda_obs_u.numpy()
             last_lambda_obs_v = self.lambda_obs_v.numpy()
@@ -386,7 +434,8 @@ class TINN():
 
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
-                print(f"Training observations acc over epoch: {train_acc:{self.print_precision}}")
+                print(
+                    f"Training observations acc over epoch: {train_acc:{self.print_precision}}")
                 print(f"total loss: {loss_total:{self.print_precision}}, "
                       f"total regularisd loss: {loss_reg_total:{self.print_precision}}")
                 print(f"obs u loss: {loss_obs_u:{self.print_precision}}, "
@@ -398,6 +447,10 @@ class TINN():
                 print(f"lambda pde u: {self.lambda_pde_u.numpy():{self.print_precision}}, "
                       f"lambda pde v: {self.lambda_pde_v.numpy():{self.print_precision}}")
                 print(self.pde_loss.trainables_str())
+                if self.extra_loss_len > 0:
+                    for i, loss in enumerate(self.extra_loss):
+                        print(
+                            f"extra loss {loss.name}: {loss_extra[i]:{self.print_precision}}")
 
             # Reset training metrics at the end of each epoch
             self.train_acc_metric.reset_states()

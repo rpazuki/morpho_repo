@@ -10,6 +10,7 @@ class TINN_multi_nodes():
     def __init__(self,
                  pinn: NN,
                  pde_loss: Loss,
+                 extra_loss=[],
                  nodes_n=2,
                  node_names=None,
                  optimizer=keras.optimizers.Adam(),
@@ -17,6 +18,8 @@ class TINN_multi_nodes():
                  alpha=0.5,
                  print_precision=".5f"):
         self.pinn = pinn
+        self.extra_loss = extra_loss
+        self.extra_loss_len = len(extra_loss)
         self.pde_loss = pde_loss
         self.nodes_n = nodes_n
         if node_names is None:
@@ -38,15 +41,24 @@ class TINN_multi_nodes():
     @tf.function
     def __train_step__(self, x, y, update_lambdas, first_step, last_step):
         with tf.GradientTape(persistent=False) as tape:
-            outputs, f_pde = self.pde_loss.pde(self.pinn, x)
+            outputs, f_pde = self.pde_loss.loss(self.pinn, x)
 
             loss_obs = tf.reduce_mean(tf.math.squared_difference(y, outputs), axis=0)
             loss_pde = tf.reduce_mean(tf.square(f_pde), axis=0)
             loss_items = tf.concat([loss_obs, loss_pde], axis=0)
-            loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
+
+            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            if self.extra_loss_len > 0:
+                for extra_loss in self.extra_loss:
+                    trainables += extra_loss.trainables()
+                loss_extra_items = [extra_loss.loss(self.pinn, x) for extra_loss in self.extra_loss]
+                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items) + tf.reduce_sum(loss_extra_items)
+            else:
+                loss_extra_items = []
+                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
 
         if update_lambdas:
-            grads = [tf.gradients(loss_items[i], self.pinn.trainable_variables + self.pde_loss.trainables())
+            grads = [tf.gradients(loss_items[i], trainables)
                      for i in range(loss_items.shape[0])]
 
             reduced_grads = tf.stack([
@@ -72,10 +84,10 @@ class TINN_multi_nodes():
                 for i in range(self.nodes_n * 2):
                     self.lambdas[i].assign(self.alpha * self.lambdas[i] + (1 - self.alpha) * 4.0 * Ws[i] / w_total)
 
-        grads = tape.gradient(loss_value, self.pinn.trainable_variables + self.pde_loss.trainables())
-        self.optimizer.apply_gradients(zip(grads, self.pinn.trainable_variables + self.pde_loss.trainables()))
+        grads = tape.gradient(loss_value, trainables)
+        self.optimizer.apply_gradients(zip(grads, trainables))
         self.train_acc_metric.update_state(y, outputs)
-        return loss_value, loss_obs, loss_pde
+        return loss_value, loss_obs, loss_pde, loss_extra_items
 
     def train(self,
               epochs,
@@ -96,6 +108,8 @@ class TINN_multi_nodes():
             arr_obs_acc = np.zeros(epochs)
             arr_loss_obs = np.zeros((epochs, self.nodes_n))
             arr_loss_pde = np.zeros((epochs, self.nodes_n))
+            if self.extra_loss_len > 0:
+                arr_loss_extra = np.zeros((epochs, self.extra_loss_len))
         if sample_regularisations:
             arr_lambda_obs = np.zeros((epochs, self.nodes_n))
             arr_lambda_pde = np.zeros((epochs, self.nodes_n))
@@ -114,6 +128,9 @@ class TINN_multi_nodes():
                 for i, name in enumerate(self.node_names):
                     ret[f"loss_obs_{name}"] = arr_loss_obs[:, i]
                     ret[f"loss_pde_{name}"] = arr_loss_pde[:, i]
+                if self.extra_loss_len > 0:
+                    for i, loss in enumerate(self.extra_loss):
+                        ret[f"loss_extra_{loss.name}"] = arr_loss_extra[:, i]
 
             if sample_regularisations:
                 for i, name in enumerate(self.node_names):
@@ -139,12 +156,12 @@ class TINN_multi_nodes():
             loss_total, loss_reg_total = 0, 0
             loss_obs = np.zeros(self.nodes_n)
             loss_pde = np.zeros(self.nodes_n)
-
+            loss_extra = np.zeros(self.extra_loss_len)
             # Iterate over the batches of the dataset.
             for step, o_batch_indices in enumerate(indices(batch_size, shuffle, X_size)):
                 x_batch_train, y_batch_train = X[o_batch_indices], Y[o_batch_indices]
 
-                loss_value_batch, loss_obs_batch, loss_pde_batch = \
+                loss_value_batch, loss_obs_batch, loss_pde_batch, loss_extra_batch = \
                     self.__train_step__(x_batch_train,
                                         y_batch_train,
                                         True,
@@ -160,6 +177,7 @@ class TINN_multi_nodes():
 
                 loss_obs += loss_obs_batch.numpy()
                 loss_pde += loss_pde_batch.numpy()
+                loss_extra += [item.numpy() for item in loss_extra_batch]
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             train_acc = self.train_acc_metric.result()
             arr_obs_acc[epoch] = train_acc
@@ -187,10 +205,15 @@ class TINN_multi_nodes():
                 for i, name in enumerate(self.node_names):
                     print(f"obs {name} loss: {loss_obs[i]:{self.print_precision}}, "
                           f"pde {name} loss: {loss_pde[i]:{self.print_precision}}")
+                for i, name in enumerate(self.node_names):
                     print(f"lambda obs {name}: {last_lambda_obs[i]:{self.print_precision}}, "
                           f"lambda pde {name}: {last_lambda_pde[i]:{self.print_precision}}")
 
                 print(self.pde_loss.trainables_str())
+                if self.extra_loss_len > 0:
+                    for i, loss in enumerate(self.extra_loss):
+                        print(
+                            f"extra loss {loss.name}: {loss_extra[i]:{self.print_precision}}")
 
             # Reset training metrics at the end of each epoch
             self.train_acc_metric.reset_states()

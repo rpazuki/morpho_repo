@@ -52,11 +52,11 @@ class Turing_PDE(Loss):
         inputs = batch
         pde_outputs, partials_1, partials_2 = self.pinn(inputs, grads = True)
         
-        pde_res = self.pde(pde_outputs, partials_1, partials_2)
+        pde_res = self.loss(pde_outputs, partials_1, partials_2)
         L = tf.reduce_sum(tf.square(pde_res), name = self.name)
         return L
     
-    def pde(self, outputs, partials_1, partials_2):
+    def loss(self, outputs, partials_1, partials_2):
         pass
     
 class ASDM(Turing_PDE):
@@ -100,7 +100,7 @@ class ASDM(Turing_PDE):
                 self.mu_a,
                 self.kappa_a]
         
-    def pde(self, outputs, partials_1, partials_2):
+    def loss(self, outputs, partials_1, partials_2):
         a = outputs[:, 0]
         s = outputs[:, 1]
         
@@ -172,7 +172,7 @@ class schnakenberg(Turing_PDE):
                 self.c_1,                
                 self.c_2]
         
-    def pde(self, outputs, partials_1, partials_2):
+    def loss(self, outputs, partials_1, partials_2):
         u = outputs[:, 0]
         v = outputs[:, 1]
         
@@ -244,7 +244,7 @@ class schnakenberg2(Turing_PDE):
                 #self.c_2
                ]
         
-    def pde(self, outputs, partials_1, partials_2):
+    def loss(self, outputs, partials_1, partials_2):
         u = outputs[:, 0]
         v = outputs[:, 1]
         

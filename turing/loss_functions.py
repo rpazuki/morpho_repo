@@ -91,7 +91,7 @@ class ASDM(Loss):
         return self._trainables_
 
     @tf.function
-    def pde(self, pinn, x):
+    def loss(self, pinn, x):
         outputs = pinn(x)
         p1, p2 = pinn.gradients(x, outputs)
 
@@ -186,7 +186,7 @@ class Schnakenberg(Loss):
         return self._trainables_
 
     @tf.function
-    def pde(self, pinn, x):
+    def loss(self, pinn, x):
         outputs = pinn(x)
         p1, p2 = pinn.gradients(x, outputs)
 
