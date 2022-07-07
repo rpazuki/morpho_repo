@@ -314,7 +314,9 @@ class TINN():
               shuffle=True,
               sample_losses=True,
               sample_regularisations=True,
-              sample_gradients=False):
+              sample_gradients=False,
+              step_callback=None,
+              epoch_callback=None):
 
         # Samplling arrays
         if sample_losses:
@@ -371,7 +373,6 @@ class TINN():
         X_size = len(X)
         # For first epoch, we store the number of steps to compelete a full epoch
         last_step = -1
-        last_lambda_obs_u, last_lambda_obs_v, last_lambda_pde_u, last_lambda_pde_v = 1.0, 1.0, 1.0, 1.0
         start_time = time.time()
 
         for epoch in range(epochs):
@@ -396,14 +397,17 @@ class TINN():
                     last_step = step
 
                 loss_reg_total += loss_value_batch
-                loss_total += (loss_obs_u_batch / last_lambda_obs_u) + (loss_obs_v_batch / last_lambda_obs_v) +\
-                              (loss_pde_u_batch / last_lambda_pde_u) + \
-                    (loss_pde_v_batch / last_lambda_pde_v)
                 loss_obs_u += loss_obs_u_batch
                 loss_obs_v += loss_obs_v_batch
                 loss_pde_u += loss_pde_u_batch
                 loss_pde_v += loss_pde_v_batch
-                loss_extra += [item.numpy() for item in loss_extra_batch]
+                total_loss_extra_batch = np.sum(
+                    [item.numpy() for item in loss_extra_batch])
+                loss_extra += total_loss_extra_batch
+                loss_total += loss_obs_u_batch + loss_obs_v_batch + loss_pde_u_batch + loss_pde_v_batch +\
+                    total_loss_extra_batch
+                if step_callback is not None:
+                    step_callback(step, epoch, loss_extra_batch)
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             train_acc = self.train_acc_metric.result()
             arr_obs_acc[epoch] = train_acc
@@ -417,21 +421,18 @@ class TINN():
                 if self.extra_loss_len > 0:
                     arr_loss_extra[epoch, :] = loss_extra
 
-            last_lambda_obs_u = self.lambda_obs_u.numpy()
-            last_lambda_obs_v = self.lambda_obs_v.numpy()
-            last_lambda_pde_u = self.lambda_pde_u.numpy()
-            last_lambda_pde_v = self.lambda_pde_v.numpy()
             if sample_regularisations:
-                arr_lambda_obs_u[epoch] = last_lambda_obs_u
-                arr_lambda_obs_v[epoch] = last_lambda_obs_v
-                arr_lambda_pde_u[epoch] = last_lambda_pde_u
-                arr_lambda_pde_v[epoch] = last_lambda_pde_v
+                arr_lambda_obs_u[epoch] = self.lambda_obs_u.numpy()
+                arr_lambda_obs_v[epoch] = self.lambda_obs_v.numpy()
+                arr_lambda_pde_u[epoch] = self.lambda_pde_u.numpy()
+                arr_lambda_pde_v[epoch] = self.lambda_pde_v.numpy()
             if sample_gradients:
                 arr_grads_obs_u[epoch] = np.sqrt(self.grad_norm_obs_u.numpy())
                 arr_grads_obs_v[epoch] = np.sqrt(self.grad_norm_obs_v.numpy())
                 arr_grads_pde_u[epoch] = np.sqrt(self.grad_norm_pde_u.numpy())
                 arr_grads_pde_v[epoch] = np.sqrt(self.grad_norm_pde_v.numpy())
-
+            if epoch_callback is not None:
+                epoch_callback(epoch)
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 print(

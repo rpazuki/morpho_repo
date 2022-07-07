@@ -1,4 +1,7 @@
+import copy
 import numpy as np
+import matplotlib.pyplot as plt
+
 
 def lower_upper_bounds(inputs_of_inputs):
     """Find the lower and upper bounds of inputs
@@ -17,9 +20,11 @@ def lower_upper_bounds(inputs_of_inputs):
 
     return lb, ub
 
+
 def indice(batch_size: int, shuffle: bool = True, *ns):
     """For old code"""
     return indices(batch_size, shuffle, *ns)
+
 
 def indices(batch_size: int, shuffle: bool = True, *ns):
     """Generator of indices for specified sizes"""
@@ -49,10 +54,13 @@ def indices(batch_size: int, shuffle: bool = True, *ns):
         ends = [(batch + 1) * size for size in indices_batch_size]
         # Correction for remining indices
         if batch == batch_steps - 1:
-            ends = [ns[i + 1] if end != ns[i + 1] else end for i, end in enumerate(ns_remain)]
+            ends = [ns[i + 1] if end != ns[i + 1]
+                    else end for i, end in enumerate(ns_remain)]
         # step's indices
         yield [indices[0][n1_start:n1_end]] + \
-              [indices[i + 1][star:end] for i, (star, end) in enumerate(zip(starts, ends))]
+              [indices[i + 1][star:end]
+                  for i, (star, end) in enumerate(zip(starts, ends))]
+
 
 def create_dataset(data,
                    t_star,
@@ -94,11 +102,16 @@ def create_dataset(data,
     boundary_y_RT = np.concatenate((np.repeat(y_domain[-1], x_size),
                                     y_domain))
 
-    boundary_XX_LB = np.tile(boundary_x_LB.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    boundary_XX_RT = np.tile(boundary_x_RT.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    boundary_YY_LB = np.tile(boundary_y_LB.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    boundary_YY_RT = np.tile(boundary_y_RT.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    boundary_TT = np.repeat(t_star[-T:], (x_size + y_size))[:, np.newaxis]  # T x (x_size + y_size), 1
+    boundary_XX_LB = np.tile(boundary_x_LB.flatten(), T)[
+        :, np.newaxis]  # (x_size + y_size) x T, 1
+    boundary_XX_RT = np.tile(boundary_x_RT.flatten(), T)[
+        :, np.newaxis]  # (x_size + y_size) x T, 1
+    boundary_YY_LB = np.tile(boundary_y_LB.flatten(), T)[
+        :, np.newaxis]  # (x_size + y_size) x T, 1
+    boundary_YY_RT = np.tile(boundary_y_RT.flatten(), T)[
+        :, np.newaxis]  # (x_size + y_size) x T, 1
+    # T x (x_size + y_size), 1
+    boundary_TT = np.repeat(t_star[-T:], (x_size + y_size))[:, np.newaxis]
     ##########################################
     # Including noise
     if signal_to_noise > 0:
@@ -111,7 +124,8 @@ def create_dataset(data,
     # PDE colocations
     idx_pde = np.random.choice(N * T, pde_data_size, replace=False)
     # Periodic boundary condition
-    idx_boundary = np.random.choice((x_size + y_size) * T, boundary_data_size, replace=False)
+    idx_boundary = np.random.choice(
+        (x_size + y_size) * T, boundary_data_size, replace=False)
 
     # Lower/Upper bounds
     lb, ub = lower_upper_bounds([np.c_[XX, YY, TT]])
@@ -123,8 +137,10 @@ def create_dataset(data,
            'ub': ub}
 
     if signal_to_noise > 0:
-        ret['obs_output'][0] += sigma_a * np.random.randn(len(idx_data), a.shape[1])
-        ret['obs_output'][1] += sigma_s * np.random.randn(len(idx_data), s.shape[1])
+        ret['obs_output'][0] += sigma_a * \
+            np.random.randn(len(idx_data), a.shape[1])
+        ret['obs_output'][1] += sigma_s * \
+            np.random.randn(len(idx_data), s.shape[1])
 
     if with_boundary:
         ret = {**ret,
@@ -137,3 +153,78 @@ def create_dataset(data,
                }
 
     return ret
+
+
+def merge_dict(dict_1, * dicts):
+    """Imutable merge of dictionary objects"""
+    ret = {}
+    all_dicts = [dict_1, * dicts]
+    for key in dict_1.keys():
+        ret[key] = np.hstack([dict_i[key] for dict_i in all_dicts])
+
+    return ret
+
+
+def plot_result(results, start=0, end=-1, node_names=['u', 'v'], yscale='log', y_lims=None):
+
+    def _closing_commands_():
+        plt.grid()
+        plt.yscale(yscale)
+        if y_lims is not None:
+            plt.ylim(y_lims)
+        plt.show()
+
+    _ = plt.figure(figsize=(14, 5))
+    plt.title("Training accuracy for observations")
+    plt.plot(results["training_obs_accuracy"][start:end])
+    _closing_commands_()
+
+    if np.any([True if k.startswith("loss_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title("Real Loss")
+        plt.plot(results["loss_total"][start:end], label="total")
+        for name in node_names:
+            plt.plot(results[f"loss_obs_{name}"]
+                     [start:end], label=f"Obs {name}")
+        for name in node_names:
+            plt.plot(results[f"loss_pde_{name}"]
+                     [start:end], label=f"PDE {name}")
+        for key in [k for k in results.keys() if k.startswith("loss_extra_")]:
+            plt.plot(results[key][start:end], label=f"{key}")
+
+        _closing_commands_()
+
+    if np.any([True if k.startswith("loss_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title("Regularisd Loss")
+        plt.plot(results["loss_regularisd_total"][start:end], label="total")
+        if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
+            for name in node_names:
+                plt.plot(results[f"lambda_obs_{name}"][start:end] * results[f"loss_obs_{name}"][start:end],
+                         label=f"Obs {name}")
+            for name in node_names:
+                plt.plot(results[f"lambda_pde_{name}"][start:end] * results[f"loss_pde_{name}"][start:end],
+                         label=f"PDE {name}")
+        _closing_commands_()
+
+    if np.any([True if k.startswith("grads_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title("Gradient Norms")
+        for name in node_names:
+            plt.plot(results[f"grads_obs_{name}"]
+                     [start:end], label=f"Grad obs {name}")
+        for name in node_names:
+            plt.plot(results[f"grads_pde_{name}"]
+                     [start:end], label=f"Grad PDE {name}")
+        _closing_commands_()
+
+    if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title(r"$\lambda$s")
+        for name in node_names:
+            plt.plot(
+                results[f"lambda_obs_{name}"][start:end], label=r"$\lambda$" f" obs {name}")
+        for name in node_names:
+            plt.plot(
+                results[f"lambda_pde_{name}"][start:end], label=r"$\lambda$" f" PDE {name}")
+        _closing_commands_()

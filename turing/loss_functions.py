@@ -27,14 +27,14 @@ class ASDM(Loss):
         self._trainables_ = ()
         if D_a is None:
             self.D_a = tf.Variable([init_value], dtype=dtype, name="D_a",
-                                   constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+                                   constraint=lambda z: tf.clip_by_value(z, 1e-7, 1e10))
             self._trainables_ += (self.D_a,)
         else:
             self.D_a = tf.constant(D_a, dtype=dtype, name="D_a")
 
         if D_s is None:
             self.D_s = tf.Variable([init_value], dtype=dtype, name="D_s",
-                                   constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+                                   constraint=lambda z: tf.clip_by_value(z, 1e-7, 1e10))
             self._trainables_ += (self.D_s,)
         else:
             self.D_s = tf.constant(D_s, dtype=dtype, name="D_s")
