@@ -111,7 +111,8 @@ class TINN_multi_nodes():
               shuffle=True,
               sample_losses=True,
               sample_regularisations=True,
-              sample_gradients=False):
+              sample_gradients=False,
+              regularise=True):
 
         # Samplling arrays
         if sample_losses:
@@ -176,7 +177,7 @@ class TINN_multi_nodes():
                 loss_value_batch, loss_obs_batch, loss_pde_batch, loss_extra_batch = \
                     self.__train_step__(x_batch_train,
                                         y_batch_train,
-                                        True,
+                                        regularise,
                                         step == 0,
                                         step == last_step)
 

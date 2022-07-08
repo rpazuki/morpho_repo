@@ -314,7 +314,8 @@ class TINN():
               shuffle=True,
               sample_losses=True,
               sample_regularisations=True,
-              sample_gradients=False):
+              sample_gradients=False,
+              regularise=True):
 
         # Samplling arrays
         if sample_losses:
@@ -387,7 +388,7 @@ class TINN():
                     loss_obs_u_batch, loss_obs_v_batch, loss_pde_u_batch, loss_pde_v_batch,\
                     loss_extra_batch = self.__train_step__(x_batch_train,
                                                            y_batch_train,
-                                                           True,
+                                                           regularise,
                                                            step == 0,
                                                            step == last_step)
 
