@@ -183,6 +183,7 @@ class Schnakenberg(Loss):
                  print_precision=".5f"):
         super().__init__(name="Loss_Schnakenberg", print_precision=print_precision)
 
+        self._trainables_ = ()
         if D_u is None:
             self.D_u = tf.Variable([init_value], dtype=dtype, name="D_u",
                                    constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
@@ -262,3 +263,52 @@ class Schnakenberg(Loss):
         f_v = v_t - D_v * (v_xx + v_yy) - c_2 + c_3 * u2v
 
         return outputs, f_u, f_v
+
+#   The following are wrapper classes to turn the usual two node losses
+#   compatible to multi nodes version
+
+
+class ASDM_multi(ASDM):
+    def __init__(self,
+                 dtype,
+                 init_value=10.0,
+                 D_a=None,
+                 D_s=None,
+                 sigma_a=None,
+                 sigma_s=None,
+                 mu_a=None,
+                 rho_a=None,
+                 rho_s=None,
+                 kappa_a=None,
+                 print_precision=".5f"
+                 ):
+        super().__init__(dtype, init_value, D_a, D_s, sigma_a, sigma_s,
+                         mu_a, rho_a, rho_s, kappa_a, print_precision)
+
+    @tf.function
+    def loss(self, pinn, x):
+        outputs, f_a, f_s = super().loss(pinn, x)
+        return outputs, tf.concat([tf.expand_dims(f_a, axis=1),
+                                   tf.expand_dims(f_s, axis=1)], axis=1)
+
+
+class Schnakenberg_multi(Schnakenberg):
+    def __init__(self,
+                 dtype,
+                 init_value=10.0,
+                 D_u=None,
+                 D_v=None,
+                 c_0=None,
+                 c_1=None,
+                 c_2=None,
+                 c_3=None,
+                 print_precision=".5f"
+                 ):
+        super().__init__(dtype, init_value, D_u, D_v, c_0, c_1,
+                         c_2, c_3, print_precision)
+
+    @tf.function
+    def loss(self, pinn, x):
+        outputs, f_u, f_v = super().loss(pinn, x)
+        return outputs, tf.concat([tf.expand_dims(f_u, axis=1),
+                                   tf.expand_dims(f_v, axis=1)], axis=1)
