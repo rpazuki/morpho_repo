@@ -3,6 +3,48 @@ from tensorflow import keras
 import numpy as np
 from . import Loss
 
+
+class Non_zero_params(Loss):
+    def __init__(self,
+                 loss_name,
+                 parameters,
+                 epsilon=1e-7,
+                 alpha=1,
+                 print_precision=".5f"):
+        super().__init__(
+            name=f"Non-zero params for {loss_name}", print_precision=print_precision)
+        """ Create a loss object that keeps the parameters from their lower bound.
+
+            It use the function f(x) = epsilon/x^alpha to control the loss and its
+            derivative.
+
+        Args:
+            loss_name:        str. The name of the corresponding loss class
+                              that the list of parameters belongs.
+            parameters:       A list of tf.Variable that belongs to another
+                              loss class.
+            epsilon:          A flaot hyper-parameter that control the loss value and
+                              its gradient. As a rule of thumb, a value of one
+                              order of magnitude smaller than the lower bound of
+                              the parameter(s) is a good choise. Defaults to 1e-7.
+            alpha:            An integer power of algebraic decay. Defaults to 1.
+            print_precision:  F-string prining format for outputs. Defaults to ".5f".
+        """
+        self.parameters = parameters
+        self.epsilon = epsilon
+        self.alpha = alpha
+
+    @tf.function
+    def loss(self, pinn, x):
+
+        def f(x):
+            # the small number epsilon*1e-3 prevents division by zero
+            return self.epsilon / (x + self.epsilon * 1e-3)**self.alpha
+
+        params = tf.stack(self.parameters)
+        return tf.reduce_sum(f(params))
+
+
 class ASDM(Loss):
     def __init__(self,
                  dtype,
@@ -27,14 +69,14 @@ class ASDM(Loss):
         self._trainables_ = ()
         if D_a is None:
             self.D_a = tf.Variable([init_value], dtype=dtype, name="D_a",
-                                   constraint=lambda z: tf.clip_by_value(z, 1e-7, 1e10))
+                                   constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10))
             self._trainables_ += (self.D_a,)
         else:
             self.D_a = tf.constant(D_a, dtype=dtype, name="D_a")
 
         if D_s is None:
             self.D_s = tf.Variable([init_value], dtype=dtype, name="D_s",
-                                   constraint=lambda z: tf.clip_by_value(z, 1e-7, 1e10))
+                                   constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10))
             self._trainables_ += (self.D_s,)
         else:
             self.D_s = tf.constant(D_s, dtype=dtype, name="D_s")
@@ -126,6 +168,7 @@ class ASDM(Loss):
         f_s = s_t - D_s * (s_xx + s_yy) + rho_s * f - sigma_s
 
         return outputs, f_a, f_s
+
 
 class Schnakenberg(Loss):
     def __init__(self,

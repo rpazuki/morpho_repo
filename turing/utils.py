@@ -168,6 +168,7 @@ def merge_dict(dict_1, * dicts):
 def plot_result(results, start=0, end=-1, node_names=['u', 'v'], yscale='log', y_lims=None):
 
     def _closing_commands_():
+        plt.legend()
         plt.grid()
         plt.yscale(yscale)
         if y_lims is not None:
@@ -176,7 +177,7 @@ def plot_result(results, start=0, end=-1, node_names=['u', 'v'], yscale='log', y
 
     _ = plt.figure(figsize=(14, 5))
     plt.title("Training accuracy for observations")
-    plt.plot(results["training_obs_accuracy"][start:end])
+    plt.plot(results["training_obs_accuracy"][start:end], label="accuracy")
     _closing_commands_()
 
     if np.any([True if k.startswith("loss_") else False for k in results.keys()]):
