@@ -314,9 +314,7 @@ class TINN():
               shuffle=True,
               sample_losses=True,
               sample_regularisations=True,
-              sample_gradients=False,
-              step_callback=None,
-              epoch_callback=None):
+              sample_gradients=False):
 
         # Samplling arrays
         if sample_losses:
@@ -406,8 +404,6 @@ class TINN():
                 loss_extra += total_loss_extra_batch
                 loss_total += loss_obs_u_batch + loss_obs_v_batch + loss_pde_u_batch + loss_pde_v_batch +\
                     total_loss_extra_batch
-                if step_callback is not None:
-                    step_callback(step, epoch, loss_extra_batch)
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             train_acc = self.train_acc_metric.result()
             arr_obs_acc[epoch] = train_acc
@@ -431,8 +427,6 @@ class TINN():
                 arr_grads_obs_v[epoch] = np.sqrt(self.grad_norm_obs_v.numpy())
                 arr_grads_pde_u[epoch] = np.sqrt(self.grad_norm_pde_u.numpy())
                 arr_grads_pde_v[epoch] = np.sqrt(self.grad_norm_pde_v.numpy())
-            if epoch_callback is not None:
-                epoch_callback(epoch)
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 print(
