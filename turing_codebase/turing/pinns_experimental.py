@@ -197,8 +197,8 @@ class TINN():
                        }
             return ret
         #
-        X1_size = len(X_obs)
-        X2_size = len(X_pde)
+        x1_size = len(X_obs)
+        x2_size = len(X_pde)
         # For first epoch, we store the number of steps to compelete a full epoch
         last_step = -1
         start_time = time.time()
@@ -210,7 +210,7 @@ class TINN():
             loss_total, loss_reg_total, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v = 0, 0, 0, 0, 0, 0
             loss_extra = np.zeros(self.extra_loss_len)
             # Iterate over the batches of the dataset.
-            for step, (o_batch_indices, p_batch_indices) in enumerate(indices(batch_size, shuffle, X1_size, X2_size)):
+            for step, (o_batch_indices, p_batch_indices) in enumerate(indices(batch_size, shuffle, x1_size, x2_size)):
                 x_batch_train, y_batch_train = X_obs[o_batch_indices], Y_obs[o_batch_indices]
                 x_batch_pde = X_pde[p_batch_indices]
 
