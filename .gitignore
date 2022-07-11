@@ -10,3 +10,4 @@ pinn_backward_problem/models_repo/**
 turing/.vscode
 turing/.vscode/settings.json
 turing_codebase/.vscode/settings.json
+**/*.nyp
