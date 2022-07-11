@@ -1,5 +1,8 @@
-from .pinns import *
-from .pinns_multi_nodes import *
+from .pinns import NN
+from .pinns import Loss
+from .pinns import TINN
+#  from .pinns_experimental import TINN as TINN_experimental
+from .pinns_multi_nodes import TINN_multi_nodes
 from . import utils
 
 __author__ = """Roozbeh H. Pazuki"""
