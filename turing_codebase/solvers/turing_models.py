@@ -8,7 +8,7 @@ def FitzHugh_Nagumo(c, t, f_args):
     alpha, epsilon, mu = f_args
     u = c[0, :, :]
     v = c[1, :, :]
-    fu = -alpha * u + epsilon * v
+    fu = epsilon * (v - alpha * u)
     fv = -u + mu * v - v * v * v
     return np.stack((fu, fv))
 

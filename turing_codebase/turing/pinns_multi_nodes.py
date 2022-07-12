@@ -57,10 +57,10 @@ class TINN_multi_nodes:
         with tf.GradientTape(persistent=False) as tape:
 
             if x_pde is None:
-                outputs, f_pde = self.pde_loss.loss(self.pinn, x_obs)
+                outputs, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_obs)
             else:
                 outputs = self.pinn(x_obs)
-                _, f_pde = self.pde_loss.loss(self.pinn, x_pde)
+                _, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_pde)
 
             loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
             loss_pde = tf.reduce_mean(tf.square(f_pde), axis=0)
@@ -176,18 +176,17 @@ class TINN_multi_nodes:
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()
+            if stop_threshold >= float(self.train_acc):
+                print("############################################")
+                print("#               Early stop                 #")
+                print("############################################")
+                return samples
             # Reset training metrics at the end of each epoch
             self.train_acc_metric.reset_states()
             self._reset_losses_()
             if epoch % print_interval == 0:
                 print(f"Time taken: {(time.time() - start_time):.2f}s")
                 start_time = time.time()
-
-            if stop_threshold >= float(self.train_acc):
-                print("############################################")
-                print("#               Early stop                 #")
-                print("############################################")
-                return samples
             # end for epoch in range(epochs)
 
         return samples

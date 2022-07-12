@@ -146,6 +146,18 @@ class Loss:
         """
         pass
 
+    @tf.function
+    def loss_multi_nodes(self, pinn, x):
+        """A tensorflow function that override the loss method
+
+        Returns a concatenated tensor of derivatives, which
+        TINN_multi_node expects.
+        """
+        res = self.loss(pinn, x)
+        outputs = res[0]
+        #  return outputs, tf.concat([tf.expand_dims(f_u, axis=1) for f_u in res[1:]], axis=1)
+        return outputs, tf.concat([f_u for f_u in res[1:]], axis=0)
+
     def trainables(self):
         """Retruns a tuple of Tensorflow variables for training
 
@@ -383,19 +395,18 @@ class TINN:
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()
-            # Reset training metrics at the end of each epoch
-            self.train_acc_metric.reset_states()
-            self._reset_losses_()
-            if epoch % print_interval == 0:
-                print(f"Time taken: {(time.time() - start_time):.2f}s")
-                start_time = time.time()
-
             if stop_threshold >= float(self.train_acc):
                 print("############################################")
                 print("#               Early stop                 #")
                 print("############################################")
                 return samples
             # end for epoch in range(epochs)
+            # Reset training metrics at the end of each epoch
+            self.train_acc_metric.reset_states()
+            self._reset_losses_()
+            if epoch % print_interval == 0:
+                print(f"Time taken: {(time.time() - start_time):.2f}s")
+                start_time = time.time()
 
         return samples
 

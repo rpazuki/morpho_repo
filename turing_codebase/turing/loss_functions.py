@@ -265,8 +265,6 @@ class FitzHugh_Nagumo(Loss):
         alpha=None,
         epsilon=None,
         mu=None,
-        c_1=None,
-        c_2=None,
         print_precision=".5f",
     ):
         super().__init__(name="FitzHugh_Nagumo", print_precision=print_precision)
@@ -312,22 +310,6 @@ class FitzHugh_Nagumo(Loss):
         else:
             self.mu = tf.constant(mu, dtype=dtype, name="mu")
 
-        if c_1 is None:
-            self.c_1 = tf.Variable(
-                [init_value], dtype=dtype, name="c_1", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
-            self._trainables_ += (self.c_1,)
-        else:
-            self.c_1 = tf.constant(c_1, dtype=dtype, name="c_1")
-
-        if c_2 is None:
-            self.c_2 = tf.Variable(
-                [init_value], dtype=dtype, name="c_2", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
-            self._trainables_ += (self.c_2,)
-        else:
-            self.c_2 = tf.constant(c_2, dtype=dtype, name="c_2")
-
     @tf.function
     def loss(self, pinn, x):
         outputs = pinn(x)
@@ -355,20 +337,18 @@ class FitzHugh_Nagumo(Loss):
         alpha = self.alpha
         epsilon = self.epsilon
         mu = self.mu
-        c_1 = self.c_1
-        c_2 = self.c_2
 
-        f_u = u_t - D_u * (u_xx + u_yy) + alpha * u - epsilon * v
-        f_v = v_t - D_v * (v_xx + v_yy) + c_1 * u - mu * v - c_2 * v * v * v
+        f_u = u_t - D_u * (u_xx + u_yy) - epsilon * (v - alpha * u)
+        f_v = v_t - D_v * (v_xx + v_yy) + u - mu * v - v * v * v
 
         return outputs, f_u, f_v
 
 
-#   The following are wrapper classes to turn the usual two node losses
-#   compatible to multi nodes version
+#   The following are wrapper classes to turn the usual losses
+#   to steady version (i.e. no time, or just one snapshot)
 
 
-class ASDM_multi(ASDM):
+class ASDM_steady(ASDM):
     def __init__(
         self,
         dtype,
@@ -387,11 +367,43 @@ class ASDM_multi(ASDM):
 
     @tf.function
     def loss(self, pinn, x):
-        outputs, f_a, f_s = super().loss(pinn, x)
-        return outputs, tf.concat([tf.expand_dims(f_a, axis=1), tf.expand_dims(f_s, axis=1)], axis=1)
+        outputs = pinn(x)
+        _, p2 = pinn.gradients(x, outputs)
+
+        a = outputs[:, 0]
+        s = outputs[:, 1]
+
+        # a_x = tf.cast(p1[0][:, 0], pinn.dtype)
+        # a_y = tf.cast(p1[0][:, 1], pinn.dtype)
+        # a_t = tf.cast(p1[0][:, 2], pinn.dtype)
+
+        a_xx = tf.cast(p2[0][:, 0], pinn.dtype)
+        a_yy = tf.cast(p2[0][:, 1], pinn.dtype)
+
+        # s_x = tf.cast(p1[1][:, 0], pinn.dtype)
+        # s_y = tf.cast(p1[1][:, 1], pinn.dtype)
+        # s_t = tf.cast(p1[1][:, 2], pinn.dtype)
+
+        s_xx = tf.cast(p2[1][:, 0], pinn.dtype)
+        s_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+
+        D_a = self.D_a
+        D_s = self.D_s
+        sigma_a = self.sigma_a
+        sigma_s = self.sigma_s
+        mu_a = self.mu_a
+        rho_a = self.rho_a
+        rho_s = self.rho_s
+        kappa_a = self.kappa_a
+
+        f = a * a * s / (1.0 + kappa_a * a * a)
+        f_a = -D_a * (a_xx + a_yy) - rho_a * f + mu_a * a - sigma_a
+        f_s = -D_s * (s_xx + s_yy) + rho_s * f - sigma_s
+
+        return outputs, f_a, f_s
 
 
-class Schnakenberg_multi(Schnakenberg):
+class Schnakenberg_steady(Schnakenberg):
     def __init__(
         self, dtype, init_value=10.0, D_u=None, D_v=None, c_0=None, c_1=None, c_2=None, c_3=None, print_precision=".5f"
     ):
@@ -399,11 +411,41 @@ class Schnakenberg_multi(Schnakenberg):
 
     @tf.function
     def loss(self, pinn, x):
-        outputs, f_u, f_v = super().loss(pinn, x)
-        return outputs, tf.concat([tf.expand_dims(f_u, axis=1), tf.expand_dims(f_v, axis=1)], axis=1)
+        outputs = pinn(x)
+        _, p2 = pinn.gradients(x, outputs)
+
+        u = outputs[:, 0]
+        v = outputs[:, 1]
+
+        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
+        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
+        # u_t = tf.cast(p1[0][:, 2], pinn.dtype)
+
+        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
+        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
+
+        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
+        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
+        # v_t = tf.cast(p1[1][:, 2], pinn.dtype)
+
+        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
+        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+
+        D_u = self.D_u
+        D_v = self.D_v
+        c_0 = self.c_0
+        c_1 = self.c_1
+        c_2 = self.c_2
+        c_3 = self.c_3
+
+        u2v = u * u * v
+        f_u = -D_u * (u_xx + u_yy) - c_1 + c_0 * u - c_3 * u2v
+        f_v = -D_v * (v_xx + v_yy) - c_2 + c_3 * u2v
+
+        return outputs, f_u, f_v
 
 
-class FitzHugh_Nagumo_multi(FitzHugh_Nagumo):
+class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
     def __init__(
         self, dtype, init_value=10.0, D_u=None, D_v=None, alpha=None, epsilon=None, mu=None, print_precision=".5f"
     ):
@@ -411,5 +453,33 @@ class FitzHugh_Nagumo_multi(FitzHugh_Nagumo):
 
     @tf.function
     def loss(self, pinn, x):
-        outputs, f_u, f_v = super().loss(pinn, x)
-        return outputs, tf.concat([tf.expand_dims(f_u, axis=1), tf.expand_dims(f_v, axis=1)], axis=1)
+        outputs = pinn(x)
+        _, p2 = pinn.gradients(x, outputs)
+
+        u = outputs[:, 0]
+        v = outputs[:, 1]
+
+        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
+        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
+        # u_t = tf.cast(p1[0][:, 2], pinn.dtype)
+
+        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
+        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
+
+        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
+        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
+        # v_t = tf.cast(p1[1][:, 2], pinn.dtype)
+
+        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
+        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+
+        D_u = self.D_u
+        D_v = self.D_v
+        alpha = self.alpha
+        epsilon = self.epsilon
+        mu = self.mu
+
+        f_u = -D_u * (u_xx + u_yy) - epsilon * (v - alpha * u)
+        f_v = -D_v * (v_xx + v_yy) + u - mu * v - v * v * v
+
+        return outputs, f_u, f_v

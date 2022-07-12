@@ -3,8 +3,8 @@ import tensorflow as tf
 import numpy as np
 from turing import NN
 from turing import TINN_multi_nodes
-from turing.loss_functions import ASDM_multi
-from turing.loss_functions import Schnakenberg_multi
+from turing.loss_functions import ASDM
+from turing.loss_functions import Schnakenberg
 from turing.loss_functions import Non_zero_params
 from turing.utils import create_dataset
 
@@ -39,7 +39,7 @@ pde_X = dataset["pde"]
 def test_pinn_samples():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = ASDM_multi(dtype=tf.float64, D_a=0.005, D_s=0.2)
+    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
     non_zero_loss_1 = Non_zero_params(f"{pde_loss.name}_1", [pde_loss.D_a, pde_loss.D_s])
     non_zero_loss_2 = Non_zero_params(f"{pde_loss.name}_2", [pde_loss.D_a, pde_loss.D_s])
     model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[non_zero_loss_1, non_zero_loss_2], node_names=["u", "v"])
@@ -78,7 +78,7 @@ def test_pinn_samples():
 def test_pinn_ASDM():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = ASDM_multi(dtype=tf.float64, D_a=0.005, D_s=0.2)
+    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
     model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[])
 
     results = model.train(
@@ -99,7 +99,7 @@ def test_pinn_ASDM():
 def test_pinn_Schnakenberg():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = Schnakenberg_multi(dtype=tf.float64, D_u=1.0, D_v=40)
+    pde_loss = Schnakenberg(dtype=tf.float64, D_u=1.0, D_v=40)
     model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[])
 
     results = model.train(
@@ -120,7 +120,7 @@ def test_pinn_Schnakenberg():
 def test_pinn_Non_zero_params():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = Schnakenberg_multi(dtype=tf.float64, D_u=1.0, D_v=40)
+    pde_loss = Schnakenberg(dtype=tf.float64, D_u=1.0, D_v=40)
     non_zero_loss = Non_zero_params(pde_loss.name, [pde_loss.D_u, pde_loss.D_v])
     model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[non_zero_loss])
 
@@ -142,7 +142,7 @@ def test_pinn_Non_zero_params():
 def test_pinn_extra_loss():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = Schnakenberg_multi(dtype=tf.float64, D_u=1.0, D_v=40)
+    pde_loss = Schnakenberg(dtype=tf.float64, D_u=1.0, D_v=40)
     non_zero_loss = Non_zero_params(pde_loss.name, [pde_loss.D_u, pde_loss.D_v])
     model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[non_zero_loss, non_zero_loss])
 
@@ -164,7 +164,7 @@ def test_pinn_extra_loss():
 def test_pinn_observations_and_pde():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = ASDM_multi(dtype=tf.float64, D_a=0.005, D_s=0.2)
+    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
     model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[])
 
     results = model.train(
