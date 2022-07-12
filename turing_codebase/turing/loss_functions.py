@@ -6,7 +6,7 @@ from . import Loss
 
 class Non_zero_params(Loss):
     def __init__(self, loss_name, parameters, epsilon=1e-7, alpha=1, print_precision=".5f"):
-        super().__init__(name=f"Non-zero params for {loss_name}", print_precision=print_precision)
+        super().__init__(name=f"non_zero_{loss_name}", print_precision=print_precision)
         """ Create a loss object that keeps the parameters from their lower bound.
 
             It use the function f(x) = epsilon/x^alpha to control the loss and its
