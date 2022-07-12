@@ -257,7 +257,17 @@ class Schnakenberg(Loss):
 
 class FitzHugh_Nagumo(Loss):
     def __init__(
-        self, dtype, init_value=10.0, D_u=None, D_v=None, alpha=None, epsilon=None, mu=None, print_precision=".5f"
+        self,
+        dtype,
+        init_value=10.0,
+        D_u=None,
+        D_v=None,
+        alpha=None,
+        epsilon=None,
+        mu=None,
+        c_1=None,
+        c_2=None,
+        print_precision=".5f",
     ):
         super().__init__(name="FitzHugh_Nagumo", print_precision=print_precision)
 
@@ -302,6 +312,22 @@ class FitzHugh_Nagumo(Loss):
         else:
             self.mu = tf.constant(mu, dtype=dtype, name="mu")
 
+        if c_1 is None:
+            self.c_1 = tf.Variable(
+                [init_value], dtype=dtype, name="c_1", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+            )
+            self._trainables_ += (self.c_1,)
+        else:
+            self.c_1 = tf.constant(c_1, dtype=dtype, name="c_1")
+
+        if c_2 is None:
+            self.c_2 = tf.Variable(
+                [init_value], dtype=dtype, name="c_2", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+            )
+            self._trainables_ += (self.c_2,)
+        else:
+            self.c_2 = tf.constant(c_2, dtype=dtype, name="c_2")
+
     @tf.function
     def loss(self, pinn, x):
         outputs = pinn(x)
@@ -329,9 +355,11 @@ class FitzHugh_Nagumo(Loss):
         alpha = self.alpha
         epsilon = self.epsilon
         mu = self.mu
+        c_1 = self.c_1
+        c_2 = self.c_2
 
         f_u = u_t - D_u * (u_xx + u_yy) + alpha * u - epsilon * v
-        f_v = v_t - D_v * (v_xx + v_yy) + u - v * (mu - v * v)
+        f_v = v_t - D_v * (v_xx + v_yy) + c_1 * u - mu * v - c_2 * v * v * v
 
         return outputs, f_u, f_v
 
