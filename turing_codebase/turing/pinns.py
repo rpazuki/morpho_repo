@@ -306,6 +306,7 @@ class TINN:
         batch_size,
         X,
         Y,
+        X_pde=None,
         print_interval=10,
         stop_threshold=0,
         shuffle=True,
@@ -378,188 +379,11 @@ class TINN:
 
         #
         x1_size = len(X)
-        # For first epoch, we store the number of steps to compelete a full epoch
-        last_step = -1
-        start_time = time.time()
-
-        for epoch in range(epochs):
-            if epoch % print_interval == 0:
-                print(f"\nStart of epoch {epoch:d}")
-
-            loss_total, loss_reg_total, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v = 0, 0, 0, 0, 0, 0
-            loss_extra = np.zeros(self.extra_loss_len)
-            # Iterate over the batches of the dataset.
-            for step, o_batch_indices in enumerate(indices(batch_size, shuffle, x1_size)):
-                x_batch_train, y_batch_train = X[o_batch_indices], Y[o_batch_indices]
-
-                (
-                    loss_value_batch,
-                    loss_obs_u_batch,
-                    loss_obs_v_batch,
-                    loss_pde_u_batch,
-                    loss_pde_v_batch,
-                    loss_extra_batch,
-                ) = self.__train_step__(x_batch_train, y_batch_train, None, regularise, step == 0, step == last_step)
-
-                if step > last_step:
-                    last_step = step
-
-                loss_reg_total += loss_value_batch
-                loss_obs_u += loss_obs_u_batch
-                loss_obs_v += loss_obs_v_batch
-                loss_pde_u += loss_pde_u_batch
-                loss_pde_v += loss_pde_v_batch
-                total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
-                loss_extra += total_loss_extra_batch
-                loss_total += (
-                    loss_obs_u_batch + loss_obs_v_batch + loss_pde_u_batch + loss_pde_v_batch + total_loss_extra_batch
-                )
-            # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
-            train_acc = self.train_acc_metric.result()
-            arr_obs_acc[epoch] = train_acc
-            if sample_losses:
-                arr_loss_total[epoch] = loss_total
-                arr_loss_regularisd_total[epoch] = loss_reg_total
-                arr_loss_obs_u[epoch] = loss_obs_u
-                arr_loss_obs_v[epoch] = loss_obs_v
-                arr_loss_pde_u[epoch] = loss_pde_u
-                arr_loss_pde_v[epoch] = loss_pde_v
-                if self.extra_loss_len > 0:
-                    arr_loss_extra[epoch, :] = loss_extra
-
-            if sample_regularisations:
-                arr_lambda_obs_u[epoch] = self.lambda_obs_u.numpy()
-                arr_lambda_obs_v[epoch] = self.lambda_obs_v.numpy()
-                arr_lambda_pde_u[epoch] = self.lambda_pde_u.numpy()
-                arr_lambda_pde_v[epoch] = self.lambda_pde_v.numpy()
-            if sample_gradients:
-                arr_grads_obs_u[epoch] = np.sqrt(self.grad_norm_obs_u.numpy())
-                arr_grads_obs_v[epoch] = np.sqrt(self.grad_norm_obs_v.numpy())
-                arr_grads_pde_u[epoch] = np.sqrt(self.grad_norm_pde_u.numpy())
-                arr_grads_pde_v[epoch] = np.sqrt(self.grad_norm_pde_v.numpy())
-            # Display metrics at the end of each epoch.
-            if epoch % print_interval == 0:
-                print(f"Training observations acc over epoch: {train_acc:{self.print_precision}}")
-                print(
-                    f"total loss: {loss_total:{self.print_precision}}, "
-                    f"total regularisd loss: {loss_reg_total:{self.print_precision}}"
-                )
-                print(
-                    f"obs u loss: {loss_obs_u:{self.print_precision}}, "
-                    f"obs v loss: {loss_obs_v:{self.print_precision}}"
-                )
-                print(
-                    f"pde u loss: {loss_pde_u:{self.print_precision}}, "
-                    f"pde v loss: {loss_pde_v:{self.print_precision}}"
-                )
-                print(
-                    f"lambda obs u: {self.lambda_obs_u.numpy():{self.print_precision}}, "
-                    f"lambda obs v: {self.lambda_obs_v.numpy():{self.print_precision}}"
-                )
-                print(
-                    f"lambda pde u: {self.lambda_pde_u.numpy():{self.print_precision}}, "
-                    f"lambda pde v: {self.lambda_pde_v.numpy():{self.print_precision}}"
-                )
-                print(self.pde_loss.trainables_str())
-                if self.extra_loss_len > 0:
-                    for i, loss in enumerate(self.extra_loss):
-                        print(f"extra loss {loss.name}: {loss_extra[i]:{self.print_precision}}")
-
-            # Reset training metrics at the end of each epoch
-            self.train_acc_metric.reset_states()
-            if epoch % print_interval == 0:
-                print(f"Time taken: {(time.time() - start_time):.2f}s")
-                start_time = time.time()
-
-            if stop_threshold >= float(train_acc):
-                print("############################################")
-                print("#               Early stop                 #")
-                print("############################################")
-                return fill_return()
-            # end for epoch in range(epochs)
-
-        return fill_return()
-
-    def train2(
-        self,
-        epochs,
-        batch_size,
-        X,
-        Y,
-        X_pde,
-        print_interval=10,
-        stop_threshold=0,
-        shuffle=True,
-        sample_losses=True,
-        sample_regularisations=True,
-        sample_gradients=False,
-        regularise=True,
-    ):
-
-        # Samplling arrays
-        if sample_losses:
-            arr_loss_total = np.zeros(epochs)
-            arr_loss_regularisd_total = np.zeros(epochs)
-            arr_obs_acc = np.zeros(epochs)
-            arr_loss_obs_u = np.zeros(epochs)
-            arr_loss_obs_v = np.zeros(epochs)
-            arr_loss_pde_u = np.zeros(epochs)
-            arr_loss_pde_v = np.zeros(epochs)
-            if self.extra_loss_len > 0:
-                arr_loss_extra = np.zeros((epochs, self.extra_loss_len))
-        if sample_regularisations:
-            arr_lambda_obs_u = np.zeros(epochs)
-            arr_lambda_obs_v = np.zeros(epochs)
-            arr_lambda_pde_u = np.zeros(epochs)
-            arr_lambda_pde_v = np.zeros(epochs)
-        if sample_gradients:
-            arr_grads_obs_u = np.zeros(epochs)
-            arr_grads_obs_v = np.zeros(epochs)
-            arr_grads_pde_u = np.zeros(epochs)
-            arr_grads_pde_v = np.zeros(epochs)
-
-        def fill_return():
-            ret = {"training_obs_accuracy": arr_obs_acc}
-            if sample_losses:
-                ret = {
-                    **ret,
-                    **{
-                        "loss_total": arr_loss_total,
-                        "loss_regularisd_total": arr_loss_regularisd_total,
-                        "loss_obs_u": arr_loss_obs_u,
-                        "loss_obs_v": arr_loss_obs_v,
-                        "loss_pde_u": arr_loss_pde_u,
-                        "loss_pde_v": arr_loss_pde_v,
-                    },
-                }
-                if self.extra_loss_len > 0:
-                    for i, loss in enumerate(self.extra_loss):
-                        ret[f"loss_extra_{loss.name}"] = arr_loss_extra[:, i]
-            if sample_regularisations:
-                ret = {
-                    **ret,
-                    **{
-                        "lambda_obs_u": arr_lambda_obs_u,
-                        "lambda_obs_v": arr_lambda_obs_v,
-                        "lambda_pde_u": arr_lambda_pde_u,
-                        "lambda_pde_v": arr_lambda_pde_v,
-                    },
-                }
-            if sample_gradients:
-                ret = {
-                    **ret,
-                    **{
-                        "grads_obs_u": arr_grads_obs_u,
-                        "grads_obs_v": arr_grads_obs_v,
-                        "grads_pde_u": arr_grads_pde_u,
-                        "grads_pde_v": arr_grads_pde_v,
-                    },
-                }
-            return ret
-
-        #
-        x1_size = len(X)
-        x2_size = len(X_pde)
+        if X_pde is None:
+            #  There is no secondary dataset
+            x2_size = x1_size
+        else:
+            x2_size = len(X_pde)
         # For first epoch, we store the number of steps to compelete a full epoch
         last_step = -1
         start_time = time.time()
@@ -573,7 +397,10 @@ class TINN:
             # Iterate over the batches of the dataset.
             for step, (o_batch_indices, p_batch_indices) in enumerate(indices(batch_size, shuffle, x1_size, x2_size)):
                 x_batch_train, y_batch_train = X[o_batch_indices], Y[o_batch_indices]
-                x_batch_pde = X_pde[p_batch_indices]
+                if X_pde is None:
+                    p_batch_train = None
+                else:
+                    p_batch_train = X_pde[p_batch_indices]
 
                 (
                     loss_value_batch,
@@ -583,7 +410,7 @@ class TINN:
                     loss_pde_v_batch,
                     loss_extra_batch,
                 ) = self.__train_step__(
-                    x_batch_train, y_batch_train, x_batch_pde, regularise, step == 0, step == last_step
+                    x_batch_train, y_batch_train, p_batch_train, regularise, step == 0, step == last_step
                 )
 
                 if step > last_step:

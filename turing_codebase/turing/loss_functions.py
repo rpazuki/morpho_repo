@@ -330,7 +330,7 @@ class FitzHugh_Nagumo(Loss):
         epsilon = self.epsilon
         mu = self.mu
 
-        f_u = u_t - D_u * (u_xx + u_yy) - epsilon * (v - alpha * u)
+        f_u = u_t - D_u * (u_xx + u_yy) + alpha * u - epsilon * v
         f_v = v_t - D_v * (v_xx + v_yy) + u - v * (mu - v * v)
 
         return outputs, f_u, f_v
