@@ -172,6 +172,7 @@ def plot_result(results, start=0, end=-1, node_names=["u", "v"], yscale="log", y
     def _closing_commands_():
         plt.legend()
         plt.grid()
+        plt.xlabel("Iterations")
         plt.yscale(yscale)
         if y_lims is not None:
             plt.ylim(y_lims)
