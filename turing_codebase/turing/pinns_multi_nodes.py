@@ -161,14 +161,20 @@ class TINN_multi_nodes:
 
                 if step > last_step:
                     last_step = step
+                # add the batch loss: Note that the weights are calculated based on the batch size
+                #                     especifically, the last batch can have a different size
+                w_obs = len(o_batch_indices) / x1_size
+                w_pde = w_obs if p_batch_train is None else len(p_batch_indices) / x2_size
 
                 self.loss_reg_total += loss_value_batch.numpy()
-                self.loss_obs += loss_obs_batch.numpy()
-                self.loss_pde += loss_pde_batch.numpy()
+                self.loss_obs += loss_obs_batch.numpy() * w_obs
+                self.loss_pde += loss_pde_batch.numpy() * w_pde
                 total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
-                self.loss_extra += total_loss_extra_batch
+                self.loss_extra += total_loss_extra_batch * w_obs
                 self.loss_total += (
-                    np.sum(loss_obs_batch.numpy()) + np.sum(loss_pde_batch.numpy()) + total_loss_extra_batch
+                    np.sum(loss_obs_batch.numpy() * w_obs)
+                    + np.sum(loss_pde_batch.numpy() * w_pde)
+                    + total_loss_extra_batch * w_obs
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
@@ -247,7 +253,7 @@ class TINN_multi_nodes:
         print(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
         print(
             f"total loss: {self.loss_total:{self.print_precision}}, "
-            f"total regularisd loss: {self.loss_reg_total:{self.print_precision}}"
+            f"total regularisd loss (sum of batches): {self.loss_reg_total:{self.print_precision}}"
         )
         for i, name in enumerate(self.node_names):
             print(

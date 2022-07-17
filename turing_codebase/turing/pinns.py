@@ -156,7 +156,8 @@ class Loss:
         res = self.loss(pinn, x)
         outputs = res[0]
         #  return outputs, tf.concat([tf.expand_dims(f_u, axis=1) for f_u in res[1:]], axis=1)
-        return outputs, tf.concat([f_u for f_u in res[1:]], axis=0)
+        #  return outputs, tf.concat([f_u for f_u in res[1:]], axis=0)
+        return outputs, tf.concat([tf.expand_dims(f_u, axis=1) for f_u in res[1:]], axis=1)
 
     def trainables(self):
         """Retruns a tuple of Tensorflow variables for training
@@ -378,19 +379,28 @@ class TINN:
 
                 if step > last_step:
                     last_step = step
+                # add the batch loss: Note that the weights are calculated based on the batch size
+                #                     especifically, the last batch can have a different size
+                w_obs = len(o_batch_indices) / x1_size
+                w_pde = w_obs if p_batch_train is None else len(p_batch_indices) / x2_size
 
                 self.loss_reg_total += loss_value_batch
-                self.loss_obs_u += loss_obs_u_batch
-                self.loss_obs_v += loss_obs_v_batch
-                self.loss_pde_u += loss_pde_u_batch
-                self.loss_pde_v += loss_pde_v_batch
+                self.loss_obs_u += loss_obs_u_batch * w_obs
+                self.loss_obs_v += loss_obs_v_batch * w_obs
+                self.loss_pde_u += loss_pde_u_batch * w_pde
+                self.loss_pde_v += loss_pde_v_batch * w_pde
                 total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
-                self.loss_extra += total_loss_extra_batch
+                self.loss_extra += total_loss_extra_batch * w_obs
                 self.loss_total += (
-                    loss_obs_u_batch + loss_obs_v_batch + loss_pde_u_batch + loss_pde_v_batch + total_loss_extra_batch
+                    loss_obs_u_batch * w_obs
+                    + loss_obs_v_batch * w_obs
+                    + loss_pde_u_batch * w_pde
+                    + loss_pde_v_batch * w_pde
+                    + total_loss_extra_batch * w_obs
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
+            # update the samples
             self._store_samples_(samples, epoch, sample_losses, sample_regularisations, sample_gradients)
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
@@ -478,7 +488,7 @@ class TINN:
         print(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
         print(
             f"total loss: {self.loss_total:{self.print_precision}}, "
-            f"total regularisd loss: {self.loss_reg_total:{self.print_precision}}"
+            f"total regularisd loss (sum of batches): {self.loss_reg_total:{self.print_precision}}"
         )
         print(
             f"obs u loss: {self.loss_obs_u:{self.print_precision}}, "

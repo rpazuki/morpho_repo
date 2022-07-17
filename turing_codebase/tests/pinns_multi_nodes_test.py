@@ -2,7 +2,7 @@ import os
 import tensorflow as tf
 import numpy as np
 from turing import NN
-from turing import TINN_multi_nodes
+from turing import TINN, TINN_multi_nodes
 from turing.loss_functions import ASDM
 from turing.loss_functions import Schnakenberg
 from turing.loss_functions import Non_zero_params
@@ -181,3 +181,49 @@ def test_pinn_observations_and_pde():
         sample_gradients=True,
     )
     assert results["training_obs_accuracy"].shape[0] == 2
+
+
+def test_multi_and_2_are_the_same():
+    layers = [3, 64, 64, 64, 64, 2]
+    np.random.seed(42)
+    tf.compat.v1.set_random_seed(42)
+    tf.random.set_seed(42)
+    pinn = NN(layers, lb, ub, dtype=tf.float64)
+    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
+    model = TINN(pinn, pde_loss, extra_loss=[])
+
+    results1 = model.train(
+        epochs=2,
+        batch_size=512,
+        X=obs_X,
+        Y=obs_Y,
+        print_interval=1,
+        stop_threshold=1e-5,
+        shuffle=True,
+        sample_losses=True,
+        sample_regularisations=True,
+        sample_gradients=True,
+    )
+
+    np.random.seed(42)
+    tf.compat.v1.set_random_seed(42)
+    tf.random.set_seed(42)
+    pinn = NN(layers, lb, ub, dtype=tf.float64)
+    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
+    model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[])
+
+    results2 = model.train(
+        epochs=2,
+        batch_size=512,
+        X=obs_X,
+        Y=obs_Y,
+        print_interval=1,
+        stop_threshold=1e-5,
+        shuffle=True,
+        sample_losses=True,
+        sample_regularisations=True,
+        sample_gradients=True,
+    )
+
+    assert np.isclose(results1["loss_total"][0], results2["loss_total"][0])
+    assert np.isclose(results1["loss_total"][1], results2["loss_total"][1])
