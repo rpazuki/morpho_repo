@@ -63,56 +63,59 @@ class TINN_multi_nodes:
                 _, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_pde)
 
             loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
-            loss_pde = tf.reduce_mean(tf.square(f_pde), axis=0)
+            loss_pde = tf.reduce_mean(tf.square(f_pde), axis=1)
             loss_items = tf.concat([loss_obs, loss_pde], axis=0)
 
             trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
             if self.extra_loss_len > 0:
+                loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
                     trainables += extra_loss.trainables()
-                loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items) + tf.reduce_sum(loss_extra_items)
             else:
                 loss_extra_items = []
                 loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
 
         if update_lambdas:
-            if x_pde is None:
-                grads = [tf.gradients(loss_items[i], trainables) for i in range(loss_items.shape[0])]
-                reduced_grads = tf.stack(
-                    [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads]
-                )
-            else:
-                grads_obs = [tf.gradients(loss_obs[i], self.pinn.trainable_variables) for i in range(loss_obs.shape[0])]
-                grads_pde = [tf.gradients(loss_pde[i], trainables) for i in range(loss_pde.shape[0])]
-                reduced_grads = tf.stack(
-                    [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads_obs]
-                    + [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads_pde]
-                )
-
-            if first_step:
-                for i in range(self.nodes_n * 2):
-                    self.grad_norms[i].assign(reduced_grads[i])
-
-                    self.loss_norms[i].assign(loss_items[i])
-
-            else:
-                for i in range(self.nodes_n * 2):
-                    self.grad_norms[i].assign(self.grad_norms[i] + reduced_grads[i])
-
-                    self.loss_norms[i].assign(self.loss_norms[i] + loss_items[i])
-
-            if last_step:
-                Ws = tf.square(self.loss_norms) / tf.sqrt(self.grad_norms)
-
-                w_total = tf.reduce_sum(Ws)
-                for i in range(self.nodes_n * 2):
-                    self.lambdas[i].assign(self.alpha * self.lambdas[i] + (1 - self.alpha) * 4.0 * Ws[i] / w_total)
+            self._update_lambdas_(x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables)
 
         grads = tape.gradient(loss_value, trainables)
         self.optimizer.apply_gradients(zip(grads, trainables))
         self.train_acc_metric.update_state(y_obs, outputs)
         return loss_value, loss_obs, loss_pde, loss_extra_items
+
+    def _update_lambdas_(self, x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables):
+        if x_pde is None:
+            grads = [tf.gradients(loss_items[i], trainables) for i in range(loss_items.shape[0])]
+            reduced_grads = tf.stack(
+                [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads]
+            )
+        else:
+            grads_obs = [tf.gradients(loss_obs[i], self.pinn.trainable_variables) for i in range(loss_obs.shape[0])]
+            grads_pde = [tf.gradients(loss_pde[i], trainables) for i in range(loss_pde.shape[0])]
+            reduced_grads = tf.stack(
+                [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads_obs]
+                + [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads_pde]
+            )
+
+        if first_step:
+            for i in range(self.nodes_n * 2):
+                self.grad_norms[i].assign(reduced_grads[i])
+
+                self.loss_norms[i].assign(loss_items[i])
+
+        else:
+            for i in range(self.nodes_n * 2):
+                self.grad_norms[i].assign(self.grad_norms[i] + reduced_grads[i])
+
+                self.loss_norms[i].assign(self.loss_norms[i] + loss_items[i])
+
+        if last_step:
+            Ws = tf.square(self.loss_norms) / tf.sqrt(self.grad_norms)
+
+            w_total = tf.reduce_sum(Ws)
+            for i in range(self.nodes_n * 2):
+                self.lambdas[i].assign(self.alpha * self.lambdas[i] + (1 - self.alpha) * 4.0 * Ws[i] / w_total)
 
     def train(
         self,
@@ -154,7 +157,6 @@ class TINN_multi_nodes:
                     p_batch_train = None
                 else:
                     p_batch_train = X_pde[p_batch_indices]
-
                 loss_value_batch, loss_obs_batch, loss_pde_batch, loss_extra_batch = self.__train_step__(
                     x_batch_train, y_batch_train, p_batch_train, regularise, step == 0, step == last_step
                 )

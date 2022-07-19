@@ -157,7 +157,8 @@ class Loss:
         outputs = res[0]
         #  return outputs, tf.concat([tf.expand_dims(f_u, axis=1) for f_u in res[1:]], axis=1)
         #  return outputs, tf.concat([f_u for f_u in res[1:]], axis=0)
-        return outputs, tf.concat([tf.expand_dims(f_u, axis=1) for f_u in res[1:]], axis=1)
+        #  return outputs, tf.concat([tf.expand_dims(f_u, axis=1) for f_u in res[1:]], axis=1)
+        return outputs, res[1:]
 
     def trainables(self):
         """Retruns a tuple of Tensorflow variables for training
@@ -272,58 +273,65 @@ class TINN:
             )
 
         if update_lambdas:
-            if x_pde is None:
-                grad_obs_u = tape.gradient(loss_obs_u, trainables)
-                grad_obs_v = tape.gradient(loss_obs_v, trainables)
-            else:
-                grad_obs_u = tape.gradient(loss_obs_u, self.pinn.trainable_variables)
-                grad_obs_v = tape.gradient(loss_obs_v, self.pinn.trainable_variables)
-            grad_pde_u = tape.gradient(loss_pde_u, trainables)
-            grad_pde_v = tape.gradient(loss_pde_v, trainables)
-
-            temp_1 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_u])
-            temp_2 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_v])
-            temp_3 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_u])
-            temp_4 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_v])
-
-            if first_step:
-                self.grad_norm_obs_u.assign(temp_1)
-                self.grad_norm_obs_v.assign(temp_2)
-                self.grad_norm_pde_u.assign(temp_3)
-                self.grad_norm_pde_v.assign(temp_4)
-
-                self.loss_norm_obs_u.assign(loss_obs_u)
-                self.loss_norm_obs_v.assign(loss_obs_v)
-                self.loss_norm_pde_u.assign(loss_pde_u)
-                self.loss_norm_pde_v.assign(loss_pde_v)
-
-            else:
-                self.grad_norm_obs_u.assign(self.grad_norm_obs_u + temp_1)
-                self.grad_norm_obs_v.assign(self.grad_norm_obs_v + temp_2)
-                self.grad_norm_pde_u.assign(self.grad_norm_pde_u + temp_3)
-                self.grad_norm_pde_v.assign(self.grad_norm_pde_v + temp_4)
-
-                self.loss_norm_obs_u.assign(self.loss_norm_obs_u + loss_obs_u)
-                self.loss_norm_obs_v.assign(self.loss_norm_obs_v + loss_obs_v)
-                self.loss_norm_pde_u.assign(self.loss_norm_pde_u + loss_pde_u)
-                self.loss_norm_pde_v.assign(self.loss_norm_pde_v + loss_pde_v)
-
-            if last_step:
-                w_1 = self.loss_norm_obs_u**2 / tf.sqrt(self.grad_norm_obs_u)
-                w_2 = self.loss_norm_obs_v**2 / tf.sqrt(self.grad_norm_obs_v)
-                w_3 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_u)
-                w_4 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_v)
-
-                w_total = w_1 + w_2 + w_3 + w_4
-                self.lambda_obs_u.assign(self.alpha * self.lambda_obs_u + ((1 - self.alpha) * 4.0 * w_1) / w_total)
-                self.lambda_obs_v.assign(self.alpha * self.lambda_obs_v + ((1 - self.alpha) * 4.0 * w_2) / w_total)
-                self.lambda_pde_u.assign(self.alpha * self.lambda_pde_u + ((1 - self.alpha) * 4.0 * w_3) / w_total)
-                self.lambda_pde_v.assign(self.alpha * self.lambda_pde_v + ((1 - self.alpha) * 4.0 * w_4) / w_total)
+            self._update_lambdas_(
+                x_pde, first_step, last_step, tape, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, trainables
+            )
 
         grads = tape.gradient(loss_value, trainables)
         self.optimizer.apply_gradients(zip(grads, trainables))
         self.train_acc_metric.update_state(y_obs, outputs)
         return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, loss_extra_items
+
+    def _update_lambdas_(
+        self, x_pde, first_step, last_step, tape, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, trainables
+    ):
+        if x_pde is None:
+            grad_obs_u = tape.gradient(loss_obs_u, trainables)
+            grad_obs_v = tape.gradient(loss_obs_v, trainables)
+        else:
+            grad_obs_u = tape.gradient(loss_obs_u, self.pinn.trainable_variables)
+            grad_obs_v = tape.gradient(loss_obs_v, self.pinn.trainable_variables)
+        grad_pde_u = tape.gradient(loss_pde_u, trainables)
+        grad_pde_v = tape.gradient(loss_pde_v, trainables)
+
+        temp_1 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_u])
+        temp_2 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_v])
+        temp_3 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_u])
+        temp_4 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_v])
+
+        if first_step:
+            self.grad_norm_obs_u.assign(temp_1)
+            self.grad_norm_obs_v.assign(temp_2)
+            self.grad_norm_pde_u.assign(temp_3)
+            self.grad_norm_pde_v.assign(temp_4)
+
+            self.loss_norm_obs_u.assign(loss_obs_u)
+            self.loss_norm_obs_v.assign(loss_obs_v)
+            self.loss_norm_pde_u.assign(loss_pde_u)
+            self.loss_norm_pde_v.assign(loss_pde_v)
+
+        else:
+            self.grad_norm_obs_u.assign(self.grad_norm_obs_u + temp_1)
+            self.grad_norm_obs_v.assign(self.grad_norm_obs_v + temp_2)
+            self.grad_norm_pde_u.assign(self.grad_norm_pde_u + temp_3)
+            self.grad_norm_pde_v.assign(self.grad_norm_pde_v + temp_4)
+
+            self.loss_norm_obs_u.assign(self.loss_norm_obs_u + loss_obs_u)
+            self.loss_norm_obs_v.assign(self.loss_norm_obs_v + loss_obs_v)
+            self.loss_norm_pde_u.assign(self.loss_norm_pde_u + loss_pde_u)
+            self.loss_norm_pde_v.assign(self.loss_norm_pde_v + loss_pde_v)
+
+        if last_step:
+            w_1 = self.loss_norm_obs_u**2 / tf.sqrt(self.grad_norm_obs_u)
+            w_2 = self.loss_norm_obs_v**2 / tf.sqrt(self.grad_norm_obs_v)
+            w_3 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_u)
+            w_4 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_v)
+
+            w_total = w_1 + w_2 + w_3 + w_4
+            self.lambda_obs_u.assign(self.alpha * self.lambda_obs_u + ((1 - self.alpha) * 4.0 * w_1) / w_total)
+            self.lambda_obs_v.assign(self.alpha * self.lambda_obs_v + ((1 - self.alpha) * 4.0 * w_2) / w_total)
+            self.lambda_pde_u.assign(self.alpha * self.lambda_pde_u + ((1 - self.alpha) * 4.0 * w_3) / w_total)
+            self.lambda_pde_v.assign(self.alpha * self.lambda_pde_v + ((1 - self.alpha) * 4.0 * w_4) / w_total)
 
     def train(
         self,

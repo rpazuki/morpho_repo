@@ -262,9 +262,10 @@ class FitzHugh_Nagumo(Loss):
         init_value=10.0,
         D_u=None,
         D_v=None,
-        alpha=None,
-        epsilon=None,
+        b=None,
+        gamma=None,
         mu=None,
+        sigma=None,
         print_precision=".5f",
     ):
         super().__init__(name="FitzHugh_Nagumo", print_precision=print_precision)
@@ -286,21 +287,19 @@ class FitzHugh_Nagumo(Loss):
         else:
             self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
 
-        if alpha is None:
-            self.alpha = tf.Variable(
-                [init_value], dtype=dtype, name="alpha", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
-            self._trainables_ += (self.alpha,)
+        if b is None:
+            self.b = tf.Variable([init_value], dtype=dtype, name="b", constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+            self._trainables_ += (self.b,)
         else:
-            self.alpha = tf.constant(alpha, dtype=dtype, name="alpha")
+            self.b = tf.constant(b, dtype=dtype, name="b")
 
-        if epsilon is None:
-            self.epsilon = tf.Variable(
-                [init_value], dtype=dtype, name="epsilon", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+        if gamma is None:
+            self.gamma = tf.Variable(
+                [init_value], dtype=dtype, name="gamma", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
             )
-            self._trainables_ += (self.epsilon,)
+            self._trainables_ += (self.gamma,)
         else:
-            self.epsilon = tf.constant(epsilon, dtype=dtype, name="epsilon")
+            self.gamma = tf.constant(gamma, dtype=dtype, name="gamma")
 
         if mu is None:
             self.mu = tf.Variable(
@@ -309,6 +308,14 @@ class FitzHugh_Nagumo(Loss):
             self._trainables_ += (self.mu,)
         else:
             self.mu = tf.constant(mu, dtype=dtype, name="mu")
+
+        if sigma is None:
+            self.sigma = tf.Variable(
+                [init_value], dtype=dtype, name="sigma", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+            )
+            self._trainables_ += (self.sigma,)
+        else:
+            self.sigma = tf.constant(sigma, dtype=dtype, name="sigma")
 
     @tf.function
     def loss(self, pinn, x):
@@ -334,12 +341,13 @@ class FitzHugh_Nagumo(Loss):
 
         D_u = self.D_u
         D_v = self.D_v
-        alpha = self.alpha
-        epsilon = self.epsilon
+        b = self.b
+        gamma = self.gamma
         mu = self.mu
+        sigma = self.sigma
 
-        f_u = u_t - D_u * (u_xx + u_yy) - epsilon * (v - alpha * u)
-        f_v = v_t - D_v * (v_xx + v_yy) + u - mu * v - v * v * v
+        f_u = u_t - D_u * (u_xx + u_yy) - mu * u + u * u * u + v - sigma
+        f_v = v_t - D_v * (v_xx + v_yy) - b * u + gamma * v
 
         return outputs, f_u, f_v
 
@@ -476,7 +484,7 @@ class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
         D_u = self.D_u
         D_v = self.D_v
         alpha = self.alpha
-        epsilon = self.epsilon
+        epsilon = self.gamma
         mu = self.mu
 
         f_u = -D_u * (u_xx + u_yy) - epsilon * (v - alpha * u)

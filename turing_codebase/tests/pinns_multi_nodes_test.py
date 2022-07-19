@@ -1,4 +1,5 @@
 import os
+import copy
 import tensorflow as tf
 import numpy as np
 from turing import NN
@@ -185,9 +186,20 @@ def test_pinn_observations_and_pde():
 
 def test_multi_and_2_are_the_same():
     layers = [3, 64, 64, 64, 64, 2]
+    model_params = {
+        "training_data_size": T * N,  # T*32,
+        "pde_data_size": (T * N) // 32,
+        "boundary_data_size": ((x_size + y_size) * T) // 8,
+        "shuffle": False,
+    }
     np.random.seed(42)
     tf.compat.v1.set_random_seed(42)
     tf.random.set_seed(42)
+    dataset = create_dataset(data, t_star, N, T, L, **model_params)
+    lb = dataset["lb"]
+    ub = dataset["ub"]
+    obs_X = dataset["obs_input"]
+    obs_Y = dataset["obs_output"]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
     pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
     model = TINN(pinn, pde_loss, extra_loss=[])
@@ -199,7 +211,7 @@ def test_multi_and_2_are_the_same():
         Y=obs_Y,
         print_interval=1,
         stop_threshold=1e-5,
-        shuffle=True,
+        shuffle=False,
         sample_losses=True,
         sample_regularisations=True,
         sample_gradients=True,
@@ -208,6 +220,11 @@ def test_multi_and_2_are_the_same():
     np.random.seed(42)
     tf.compat.v1.set_random_seed(42)
     tf.random.set_seed(42)
+    dataset = create_dataset(data, t_star, N, T, L, **model_params)
+    lb = dataset["lb"]
+    ub = dataset["ub"]
+    obs_X = dataset["obs_input"]
+    obs_Y = dataset["obs_output"]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
     pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
     model = TINN_multi_nodes(pinn, pde_loss, extra_loss=[])
@@ -219,7 +236,7 @@ def test_multi_and_2_are_the_same():
         Y=obs_Y,
         print_interval=1,
         stop_threshold=1e-5,
-        shuffle=True,
+        shuffle=False,
         sample_losses=True,
         sample_regularisations=True,
         sample_gradients=True,
