@@ -115,7 +115,9 @@ class TINN_multi_nodes:
 
             w_total = tf.reduce_sum(Ws)
             for i in range(self.nodes_n * 2):
-                self.lambdas[i].assign(self.alpha * self.lambdas[i] + (1 - self.alpha) * 4.0 * Ws[i] / w_total)
+                self.lambdas[i].assign(
+                    self.alpha * self.lambdas[i] + (1 - self.alpha) * 2 * self.nodes_n * Ws[i] / w_total
+                )
 
     def train(
         self,

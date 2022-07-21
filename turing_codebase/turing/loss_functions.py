@@ -356,6 +356,133 @@ class FitzHugh_Nagumo(Loss):
 #   to steady version (i.e. no time, or just one snapshot)
 
 
+class Circuit2_variant5716(Loss):
+    def __init__(
+        self,
+        dtype,
+        init_value=10.0,
+        D_A=None,
+        D_B=None,
+        b_A=None,
+        b_B=None,
+        b_C=None,
+        b_D=None,
+        b_E=None,
+        b_F=None,
+        V_A=None,
+        V_B=None,
+        V_C=None,
+        V_D=None,
+        V_E=None,
+        V_F=None,
+        k_AA=None,
+        k_BD=None,
+        k_CE=None,
+        k_DA=None,
+        k_EB=None,
+        k_EE=None,
+        k_FE=None,
+        mu_A=None,
+        mulv_A=None,
+        print_precision=".5f",
+    ):
+        super().__init__(name="Circuit2_variant5716", print_precision=print_precision)
+
+        self._trainables_ = ()
+
+        def add_trainable(param, param_name):
+            if param is None:
+                v = tf.Variable(
+                    [init_value], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-10, 1e10)
+                )
+                self._trainables_ += (v,)
+                setattr(self, param_name, v)
+            else:
+                setattr(self, param_name, tf.constant(param, dtype=dtype, name=param_name))
+
+        add_trainable(D_A, "D_A")
+        add_trainable(D_B, "D_B")
+        add_trainable(b_A, "b_A")
+        add_trainable(b_B, "b_B")
+        add_trainable(b_C, "b_C")
+        add_trainable(b_D, "b_D")
+        add_trainable(b_E, "b_E")
+        add_trainable(b_F, "b_F")
+        add_trainable(V_A, "V_A")
+        add_trainable(V_B, "V_B")
+        add_trainable(V_C, "V_C")
+        add_trainable(V_D, "V_D")
+        add_trainable(V_E, "V_E")
+        add_trainable(V_F, "V_F")
+        add_trainable(k_AA, "k_AA")
+        add_trainable(k_BD, "k_BD")
+        add_trainable(k_CE, "k_CE")
+        add_trainable(k_DA, "k_DA")
+        add_trainable(k_EB, "k_EB")
+        add_trainable(k_EE, "k_EE")
+        add_trainable(k_FE, "k_FE")
+        add_trainable(mu_A, "mu_A")
+        add_trainable(mulv_A, "mulv_A")
+
+    @tf.function
+    def loss(self, pinn, x):
+        outputs = pinn(x)
+        p1, p2 = pinn.gradients(x, outputs)
+
+        A = outputs[:, 0]
+        B = outputs[:, 1]
+        C = outputs[:, 2]
+        D = outputs[:, 3]
+        E = outputs[:, 4]
+        F = outputs[:, 5]
+
+        A_t = tf.cast(p1[0][:, 2], pinn.dtype)
+
+        A_xx = tf.cast(p2[0][:, 0], pinn.dtype)
+        A_yy = tf.cast(p2[0][:, 1], pinn.dtype)
+
+        B_t = tf.cast(p1[1][:, 2], pinn.dtype)
+
+        B_xx = tf.cast(p2[1][:, 0], pinn.dtype)
+        B_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+
+        C_t = tf.cast(p1[2][:, 2], pinn.dtype)
+        D_t = tf.cast(p1[3][:, 2], pinn.dtype)
+        E_t = tf.cast(p1[4][:, 2], pinn.dtype)
+        F_t = tf.cast(p1[5][:, 2], pinn.dtype)
+
+        def noncompetitiveact(U, km, n=2):
+            act = ((U / (km + 1e-20)) ** (n)) / (1 + (U / (km + 1e-20)) ** (n))
+            return act
+
+        def noncompetitiveinh(U, km, n=2):
+            inh = 1 / (1 + (U / (km + 1e-20)) ** (n))
+            return inh
+
+        f_A = A_t - self.D_A * (A_xx + A_yy) - self.b_A - self.V_A * noncompetitiveinh(D, self.k_DA) + self.mu_A * A
+        f_B = (
+            B_t
+            - self.D_B * (B_xx + B_yy)
+            - self.b_B
+            - self.V_B * noncompetitiveact(A, self.k_AA) * noncompetitiveinh(E, self.k_EB)
+            + self.mu_A * B
+        )
+        f_C = C_t - self.b_C - self.V_C * noncompetitiveinh(D, self.k_DA) + self.mulv_A * C
+        f_D = D_t - self.b_D - self.V_D * noncompetitiveact(B, self.k_BD) + self.mulv_A * D
+        f_E = (
+            E_t
+            - self.b_E
+            - self.V_E
+            * noncompetitiveinh(C, self.k_CE)
+            * noncompetitiveinh(F, self.k_FE)
+            * noncompetitiveact(E, self.k_EE)
+            + self.mulv_A * E
+        )
+        f_F = F_t - self.b_F - self.V_F * noncompetitiveact(B, self.k_BD) + self.mulv_A * F
+
+        return outputs, f_A, f_B, f_C, f_D, f_E, f_F
+
+
 class ASDM_steady(ASDM):
     def __init__(
         self,

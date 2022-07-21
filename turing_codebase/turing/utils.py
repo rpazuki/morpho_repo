@@ -258,6 +258,66 @@ def create_dataset_mask(
     return ret
 
 
+def create_dataset_multi_nodes_mask(
+    data,
+    mask,
+    t_star,
+    N,
+    T,
+    L,
+    training_data_size,
+    pde_data_size,
+    signal_to_noise=0,
+    shuffle=True,
+):
+    x_size = data.shape[1]
+    y_size = data.shape[2]
+    x_domain = L * np.linspace(0, 1, x_size)
+    y_domain = L * np.linspace(0, 1, y_size)
+
+    X, Y = np.meshgrid(x_domain, y_domain, sparse=False, indexing="ij")
+    XX = np.tile(X.flatten(), T)  # N x T
+    YY = np.tile(Y.flatten(), T)  # N x T
+    TT = np.repeat(t_star[-T:], N)  # T x N
+
+    UU = np.einsum("cijk->ckij", data[:, :, :, -T:])
+    UU = np.array([UU[i, :, :, :].flatten() for i in range(UU.shape[0])])  # c , N x T
+    MASK = np.einsum("ijk->kij", mask[:, :, -T:]).flatten()  # N x T
+
+    ##########################################
+    # Including noise
+    if signal_to_noise > 0:
+        signal_amp_u = (np.max(UU) - np.min(UU)) / 2.0
+        sigma_u = signal_amp_u * signal_to_noise
+    # Observed data
+    if shuffle:
+        idx_data = np.random.choice(N * T, training_data_size, replace=False)
+    else:
+        idx_data = list(range(training_data_size))
+    # PDE colocations
+    if shuffle:
+        idx_pde = np.random.choice(N * T, pde_data_size, replace=False)
+    else:
+        idx_pde = list(range(pde_data_size))
+
+    # Lower/Upper bounds
+    lb, ub = lower_upper_bounds([np.c_[XX, YY, TT]])
+
+    ret = {
+        "obs_input": np.c_[XX[idx_data], YY[idx_data], TT[idx_data]],
+        "obs_output": np.vstack([UU[i, idx_data] for i in range(UU.shape[0])]).T,
+        "obs_mask": MASK[idx_data],
+        "pde": np.c_[XX[idx_pde], YY[idx_pde], TT[idx_pde]],
+        "pde_mask": MASK[idx_pde],
+        "lb": lb,
+        "ub": ub,
+    }
+    if signal_to_noise > 0:
+        ret["obs_output"] += sigma_u * np.random.randn(len(idx_data))
+
+    return ret
+
+
 def merge_dict(dict_1, *dicts):
     """Imutable merge of dictionary objects"""
     ret = {}
