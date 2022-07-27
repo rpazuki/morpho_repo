@@ -64,3 +64,17 @@ def Koch_Meinhardt(c, t, f_args):
     fu = rho_u * u2v_u2 - mu_u * u + sigma_u
     fv = -rho_v * u2v_u2 + sigma_v
     return np.stack((fu, fv))
+
+
+#  $\partial_t u = D_u (\partial_x^2 + \partial_y^2)u + A - (B+1)u + u^2v$
+#  $\partial_t v = D_v (\partial_x^2 + \partial_y^2)v + Bu - u^2 v$
+@numba.jit(nopython=True)
+def Brusselator(c, t, f_args):
+    A, B = f_args
+    u = c[0, :, :]
+    v = c[1, :, :]
+    u2 = u**2
+    u2v = u2 * v
+    fu = A - (B + 1) * u + u2v
+    fv = B * u - u2v
+    return np.stack((fu, fv))

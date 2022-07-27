@@ -354,6 +354,80 @@ class FitzHugh_Nagumo(Loss):
 
 #   The following are wrapper classes to turn the usual losses
 #   to steady version (i.e. no time, or just one snapshot)
+class Brusselator(Loss):
+    def __init__(
+        self,
+        dtype,
+        init_value=10.0,
+        D_u=None,
+        D_v=None,
+        A=None,
+        B=None,
+        print_precision=".5f",
+    ):
+        super().__init__(name="Brusselator", print_precision=print_precision)
+
+        self._trainables_ = ()
+        if D_u is None:
+            self.D_u = tf.Variable(
+                [init_value], dtype=dtype, name="D_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+            )
+            self._trainables_ += (self.D_u,)
+        else:
+            self.D_u = tf.constant(D_u, dtype=dtype, name="D_u")
+        if D_v is None:
+            self.D_v = tf.Variable(
+                [init_value], dtype=dtype, name="D_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+            )
+            self._trainables_ += (self.D_v,)
+        else:
+            self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
+
+        if A is None:
+            self.A = tf.Variable([init_value], dtype=dtype, name="A", constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+            self._trainables_ += (self.A,)
+        else:
+            self.A = tf.constant(A, dtype=dtype, name="A")
+
+        if B is None:
+            self.B = tf.Variable([init_value], dtype=dtype, name="B", constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+            self._trainables_ += (self.B,)
+        else:
+            self.B = tf.constant(B, dtype=dtype, name="B")
+
+    @tf.function
+    def loss(self, pinn, x):
+        outputs = pinn(x)
+        p1, p2 = pinn.gradients(x, outputs)
+
+        u = outputs[:, 0]
+        v = outputs[:, 1]
+
+        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
+        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
+        u_t = tf.cast(p1[0][:, 2], pinn.dtype)
+
+        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
+        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
+
+        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
+        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
+        v_t = tf.cast(p1[1][:, 2], pinn.dtype)
+
+        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
+        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+
+        D_u = self.D_u
+        D_v = self.D_v
+        A = self.A
+        B = self.B
+
+        u2v = u * u * v
+
+        f_u = u_t - D_u * (u_xx + u_yy) - A + (B + 1) * u - u2v
+        f_v = v_t - D_v * (v_xx + v_yy) - B * u + u2v
+
+        return outputs, f_u, f_v
 
 
 class Circuit2_variant5716(Loss):
@@ -436,13 +510,23 @@ class Circuit2_variant5716(Loss):
         E = outputs[:, 4]
         F = outputs[:, 5]
 
+        # p1 = [tf.gradients(outputs[:, i], x)[0] for i in range(outputs.shape[1])]
+
+        # A_x = tf.cast(p1[0][:, 0], pinn.dtype)
+        # A_y = tf.cast(p1[0][:, 1], pinn.dtype)
         A_t = tf.cast(p1[0][:, 2], pinn.dtype)
 
+        # A_xx = tf.cast(tf.gradients(A_x, x)[0][:, 0], pinn.dtype)
+        # A_yy = tf.cast(tf.gradients(A_y, x)[0][:, 1], pinn.dtype)
         A_xx = tf.cast(p2[0][:, 0], pinn.dtype)
         A_yy = tf.cast(p2[0][:, 1], pinn.dtype)
 
+        # B_x = tf.cast(p1[1][:, 0], pinn.dtype)
+        # B_y = tf.cast(p1[1][:, 1], pinn.dtype)
         B_t = tf.cast(p1[1][:, 2], pinn.dtype)
 
+        # B_xx = tf.cast(tf.gradients(B_x, x)[0][:, 0], pinn.dtype)
+        # B_yy = tf.cast(tf.gradients(B_y, x)[0][:, 1], pinn.dtype)
         B_xx = tf.cast(p2[1][:, 0], pinn.dtype)
         B_yy = tf.cast(p2[1][:, 1], pinn.dtype)
 

@@ -78,13 +78,17 @@ class TINN_masked(TINN):
         stop_threshold=0,
         shuffle=True,
         sample_losses=True,
+        sample_parameters=True,
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
+        regularise_int=10,
     ):
 
         # Samplling arrays
-        samples = self._create_samples_(epochs, sample_losses, sample_regularisations, sample_gradients)
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
         #
         x1_size = len(X)
         if X_pde is None:
@@ -123,7 +127,7 @@ class TINN_masked(TINN):
                     y_batch_train,
                     p_batch_train,
                     domain_mask_train,
-                    regularise,
+                    regularise and epoch % regularise_int == 0,
                     step == 0,
                     step == last_step,
                 )
@@ -152,7 +156,9 @@ class TINN_masked(TINN):
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
             # update the samples
-            self._store_samples_(samples, epoch, sample_losses, sample_regularisations, sample_gradients)
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()
@@ -234,13 +240,17 @@ class TINN_multi_nodes_masked(TINN_multi_nodes):
         stop_threshold=0,
         shuffle=True,
         sample_losses=True,
+        sample_parameters=True,
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
+        regularise_int=10,
     ):
 
         # Samplling arrays
-        samples = self._create_samples_(epochs, sample_losses, sample_regularisations, sample_gradients)
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
         #
         x1_size = len(X)
         if X_pde is None:
@@ -271,7 +281,7 @@ class TINN_multi_nodes_masked(TINN_multi_nodes):
                     y_batch_train,
                     p_batch_train,
                     domain_mask_train,
-                    regularise,
+                    regularise and epoch % regularise_int == 0,
                     step == 0,
                     step == last_step,
                 )
@@ -282,45 +292,6 @@ class TINN_multi_nodes_masked(TINN_multi_nodes):
                 #                     especifically, the last batch can have a different size
                 w_obs = len(o_batch_indices) / x1_size
                 w_pde = w_obs if p_batch_train is None else len(p_batch_indices) / x2_size
-
-                if np.any(np.isnan(loss_value_batch.numpy())):
-                    print(f"Nan values in loss_value_batch. Epoch: {epoch}, step:{step}")
-                    return (
-                        samples,
-                        loss_value_batch,
-                        loss_obs_batch,
-                        loss_pde_batch,
-                        x_batch_train,
-                        y_batch_train,
-                        p_batch_train,
-                        domain_mask_train,
-                    )
-
-                if np.any(np.isnan(loss_obs_batch.numpy())):
-                    print(f"Nan values in loss_obs_batch. Epoch: {epoch}, step:{step}")
-                    return (
-                        samples,
-                        loss_value_batch,
-                        loss_obs_batch,
-                        loss_pde_batch,
-                        x_batch_train,
-                        y_batch_train,
-                        p_batch_train,
-                        domain_mask_train,
-                    )
-
-                if np.any(np.isnan(loss_pde_batch.numpy())):
-                    print(f"Nan values in loss_pde_batch. Epoch: {epoch}, step:{step}")
-                    return (
-                        samples,
-                        loss_value_batch,
-                        loss_obs_batch,
-                        loss_pde_batch,
-                        x_batch_train,
-                        y_batch_train,
-                        p_batch_train,
-                        domain_mask_train,
-                    )
 
                 self.loss_reg_total += loss_value_batch.numpy()
                 self.loss_obs += loss_obs_batch.numpy() * w_obs
@@ -334,7 +305,9 @@ class TINN_multi_nodes_masked(TINN_multi_nodes):
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
-            self._store_samples_(samples, epoch, sample_losses, sample_regularisations, sample_gradients)
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()
@@ -425,13 +398,16 @@ class TINN_masked2(TINN):
         stop_threshold=0,
         shuffle=True,
         sample_losses=True,
+        sample_parameters=True,
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
     ):
 
         # Samplling arrays
-        samples = self._create_samples_(epochs, sample_losses, sample_regularisations, sample_gradients)
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
         #
         x1_size = len(X)
         if X_pde is None:
@@ -500,7 +476,9 @@ class TINN_masked2(TINN):
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
             # update the samples
-            self._store_samples_(samples, epoch, sample_losses, sample_regularisations, sample_gradients)
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()
@@ -584,13 +562,16 @@ class TINN_multi_nodes_masked2(TINN_multi_nodes):
         stop_threshold=0,
         shuffle=True,
         sample_losses=True,
+        sample_parameters=True,
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
     ):
 
         # Samplling arrays
-        samples = self._create_samples_(epochs, sample_losses, sample_regularisations, sample_gradients)
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
         #
         x1_size = len(X)
         if X_pde is None:
@@ -647,7 +628,9 @@ class TINN_multi_nodes_masked2(TINN_multi_nodes):
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
-            self._store_samples_(samples, epoch, sample_losses, sample_regularisations, sample_gradients)
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()

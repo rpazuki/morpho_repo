@@ -328,6 +328,30 @@ def merge_dict(dict_1, *dicts):
     return ret
 
 
+def merge_dict_multi_nodes(node_names, *dicts):
+    """Imutable merge of dictionary objects"""
+    ret = {}
+    for d in dicts:
+        for key in d.keys():
+            # 1D arrays
+            if len(d[key].shape) == 1:
+                if key not in ret.keys():
+                    ret[key] = d[key]
+                else:
+                    ret[key] = np.concatenate((ret[key], d[key]), axis=0)
+            else:  # 2d Arrays
+                if key not in ret.keys():
+                    d_2_d = d[key]
+                    for i, name in enumerate(node_names):
+                        ret[f"{key}_{name}"] = d_2_d[i]
+                else:
+                    d_2_d = d[key]
+                    for i, name in enumerate(node_names):
+                        ret[f"{key}_{name}"] = np.concatenate((ret[f"{key}_{name}"], d_2_d[i]), axis=0)
+
+    return ret
+
+
 def plot_result(results, start=0, end=-1, node_names=["u", "v"], yscale="log", y_lims=None):
     import matplotlib.pyplot as plt
 

@@ -192,6 +192,9 @@ class Loss:
         else:
             return val[0]
 
+    def parameter_names(self):
+        return [f"{v.name.split(':')[0]}" for v in self.trainables()]
+
 
 class TINN:
     """Turing-Informed Neural Net"""
@@ -344,13 +347,16 @@ class TINN:
         stop_threshold=0,
         shuffle=True,
         sample_losses=True,
+        sample_parameters=True,
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
     ):
 
         # Samplling arrays
-        samples = self._create_samples_(epochs, sample_losses, sample_regularisations, sample_gradients)
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
         #
         x1_size = len(X)
         if X_pde is None:
@@ -409,7 +415,9 @@ class TINN:
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
             # update the samples
-            self._store_samples_(samples, epoch, sample_losses, sample_regularisations, sample_gradients)
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()
@@ -428,7 +436,7 @@ class TINN:
 
         return samples
 
-    def _create_samples_(self, epochs, sample_losses, sample_regularisations, sample_gradients):
+    def _create_samples_(self, epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters):
         # Samplling arrays
         ret = {"training_obs_accuracy": np.zeros(epochs)}
         if sample_losses:
@@ -466,9 +474,14 @@ class TINN:
                     "grads_pde_v": np.zeros(epochs),
                 },
             }
+        if sample_parameters:
+            for param in self.pde_loss.trainables():
+                ret[f"{param.name.split(':')[0]}"] = np.zeros(epochs)
         return ret
 
-    def _store_samples_(self, samples, epoch, sample_losses, sample_regularisations, sample_gradients):
+    def _store_samples_(
+        self, samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+    ):
         samples["training_obs_accuracy"][epoch] = self.train_acc
         if sample_losses:
             samples["loss_total"][epoch] = self.loss_total
@@ -491,6 +504,10 @@ class TINN:
             samples["grads_obs_v"][epoch] = np.sqrt(self.grad_norm_obs_v.numpy())
             samples["grads_pde_u"][epoch] = np.sqrt(self.grad_norm_pde_u.numpy())
             samples["grads_pde_v"][epoch] = np.sqrt(self.grad_norm_pde_v.numpy())
+
+        if sample_parameters:
+            for param in self.pde_loss.trainables():
+                samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
     def _print_metrics_(self):
         print(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")

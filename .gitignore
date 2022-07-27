@@ -11,3 +11,7 @@ turing/.vscode
 turing/.vscode/settings.json
 turing_codebase/.vscode/settings.json
 **/*.nyp
+growth/saved_models/**
+growth/saved_models/**/*
+growth/saved_models/*.pkl
+20201026 JM204_Cell2_stim_uropod_Export_CellLight_OpTool.mat
