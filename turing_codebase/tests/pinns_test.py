@@ -39,9 +39,9 @@ pde_X = dataset["pde"]
 def test_pinn_samples():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
-    non_zero_loss_1 = Non_zero_params(f"{pde_loss.name}_1", [pde_loss.D_a, pde_loss.D_s])
-    non_zero_loss_2 = Non_zero_params(f"{pde_loss.name}_2", [pde_loss.D_a, pde_loss.D_s])
+    pde_loss = ASDM(dtype=tf.float64, D_u=0.005, D_v=0.2)
+    non_zero_loss_1 = Non_zero_params(f"{pde_loss.name}_1", [pde_loss.D_u, pde_loss.D_v])
+    non_zero_loss_2 = Non_zero_params(f"{pde_loss.name}_2", [pde_loss.D_u, pde_loss.D_v])
     model = TINN(pinn, pde_loss, extra_loss=[non_zero_loss_1, non_zero_loss_2])
 
     results = model.train(
@@ -78,7 +78,7 @@ def test_pinn_samples():
 def test_pinn_ASDM():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
+    pde_loss = ASDM(dtype=tf.float64, D_u=0.005, D_v=0.2)
     model = TINN(pinn, pde_loss, extra_loss=[])
 
     results = model.train(
@@ -164,7 +164,7 @@ def test_pinn_extra_loss():
 def test_pinn_observations_and_pde():
     layers = [3, 64, 64, 64, 64, 2]
     pinn = NN(layers, lb, ub, dtype=tf.float64)
-    pde_loss = ASDM(dtype=tf.float64, D_a=0.005, D_s=0.2)
+    pde_loss = ASDM(dtype=tf.float64, D_u=0.005, D_v=0.2)
     model = TINN(pinn, pde_loss, extra_loss=[])
 
     results = model.train(

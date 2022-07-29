@@ -352,7 +352,7 @@ def merge_dict_multi_nodes(node_names, *dicts):
     return ret
 
 
-def plot_result(results, start=0, end=-1, node_names=["u", "v"], yscale="log", y_lims=None):
+def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"], yscale="log", y_lims=None):
     import matplotlib.pyplot as plt
 
     def _closing_commands_():
@@ -415,4 +415,11 @@ def plot_result(results, start=0, end=-1, node_names=["u", "v"], yscale="log", y
             plt.plot(results[f"lambda_obs_{name}"][start:end], label=r"$\lambda$" f" obs {name}")
         for name in node_names:
             plt.plot(results[f"lambda_pde_{name}"][start:end], label=r"$\lambda$" f" PDE {name}")
+        _closing_commands_()
+
+    if param_names is not None:
+        _ = plt.figure(figsize=(14, 5))
+        plt.title(r"Estimated parameters")
+        for name in param_names:
+            plt.plot(results[f"{name}"][start:end], label=f"{name}")
         _closing_commands_()

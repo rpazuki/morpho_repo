@@ -43,14 +43,14 @@ class ASDM(Loss):
         self,
         dtype,
         init_value=10.0,
-        D_a=None,
-        D_s=None,
-        sigma_a=None,
-        sigma_s=None,
-        mu_a=None,
-        rho_a=None,
-        rho_s=None,
-        kappa_a=None,
+        D_u=None,
+        D_v=None,
+        sigma_u=None,
+        sigma_v=None,
+        mu_u=None,
+        rho_u=None,
+        rho_v=None,
+        kappa_u=None,
         print_precision=".5f",
     ):
         """ASDM PDE loss
@@ -62,106 +62,106 @@ class ASDM(Loss):
         super().__init__(name="Loss_ASDM", print_precision=print_precision)
 
         self._trainables_ = ()
-        if D_a is None:
-            self.D_a = tf.Variable(
-                [init_value], dtype=dtype, name="D_a", constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
+        if D_u is None:
+            self.D_u = tf.Variable(
+                [init_value], dtype=dtype, name="D_u", constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
             )
-            self._trainables_ += (self.D_a,)
+            self._trainables_ += (self.D_u,)
         else:
-            self.D_a = tf.constant(D_a, dtype=dtype, name="D_a")
+            self.D_u = tf.constant(D_u, dtype=dtype, name="D_u")
 
-        if D_s is None:
-            self.D_s = tf.Variable(
-                [init_value], dtype=dtype, name="D_s", constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
+        if D_v is None:
+            self.D_v = tf.Variable(
+                [init_value], dtype=dtype, name="D_v", constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
             )
-            self._trainables_ += (self.D_s,)
+            self._trainables_ += (self.D_v,)
         else:
-            self.D_s = tf.constant(D_s, dtype=dtype, name="D_s")
+            self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
 
-        if sigma_a is None:
-            self.sigma_a = tf.Variable(
-                [init_value], dtype=dtype, name="sigma_a", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+        if sigma_u is None:
+            self.sigma_u = tf.Variable(
+                [init_value], dtype=dtype, name="sigma_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
             )
-            self._trainables_ += (self.sigma_a,)
+            self._trainables_ += (self.sigma_u,)
         else:
-            self.sigma_a = tf.constant(sigma_a, dtype=dtype, name="sigma_a")
+            self.sigma_u = tf.constant(sigma_u, dtype=dtype, name="sigma_u")
 
-        if sigma_s is None:
-            self.sigma_s = tf.Variable(
-                [init_value], dtype=dtype, name="sigma_s", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+        if sigma_v is None:
+            self.sigma_v = tf.Variable(
+                [init_value], dtype=dtype, name="sigma_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
             )
-            self._trainables_ += (self.sigma_s,)
+            self._trainables_ += (self.sigma_v,)
         else:
-            self.sigma_s = tf.constant(sigma_s, dtype=dtype, name="sigma_s")
+            self.sigma_v = tf.constant(sigma_v, dtype=dtype, name="sigma_v")
 
-        if mu_a is None:
-            self.mu_a = tf.Variable(
-                [init_value], dtype=dtype, name="mu_a", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+        if mu_u is None:
+            self.mu_u = tf.Variable(
+                [init_value], dtype=dtype, name="mu_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
             )
-            self._trainables_ += (self.mu_a,)
+            self._trainables_ += (self.mu_u,)
         else:
-            self.mu_a = tf.constant(mu_a, dtype=dtype, name="mu_a")
+            self.mu_u = tf.constant(mu_u, dtype=dtype, name="mu_u")
 
-        if rho_a is None:
-            self.rho_a = tf.Variable(
-                [init_value], dtype=dtype, name="rho_a", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+        if rho_u is None:
+            self.rho_u = tf.Variable(
+                [init_value], dtype=dtype, name="rho_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
             )
-            self._trainables_ += (self.rho_a,)
+            self._trainables_ += (self.rho_u,)
         else:
-            self.rho_a = tf.constant(rho_a, dtype=dtype, name="rho_a")
+            self.rho_u = tf.constant(rho_u, dtype=dtype, name="rho_u")
 
-        if rho_s is None:
-            self.rho_s = tf.Variable(
-                [init_value], dtype=dtype, name="rho_s", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+        if rho_v is None:
+            self.rho_v = tf.Variable(
+                [init_value], dtype=dtype, name="rho_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
             )
-            self._trainables_ += (self.rho_s,)
+            self._trainables_ += (self.rho_v,)
         else:
-            self.rho_s = tf.constant(rho_s, dtype=dtype, name="rho_s")
+            self.rho_v = tf.constant(rho_v, dtype=dtype, name="rho_v")
 
-        if kappa_a is None:
-            self.kappa_a = tf.Variable(
-                [init_value], dtype=dtype, name="kappa_a", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
+        if kappa_u is None:
+            self.kappa_u = tf.Variable(
+                [init_value], dtype=dtype, name="kappa_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
             )
-            self._trainables_ += (self.kappa_a,)
+            self._trainables_ += (self.kappa_u,)
         else:
-            self.kappa_a = tf.constant(kappa_a, dtype=dtype, name="kappa_a")
+            self.kappa_u = tf.constant(kappa_u, dtype=dtype, name="kappa_u")
 
     @tf.function
     def loss(self, pinn, x):
         outputs = pinn(x)
         p1, p2 = pinn.gradients(x, outputs)
 
-        a = outputs[:, 0]
-        s = outputs[:, 1]
+        u = outputs[:, 0]
+        v = outputs[:, 1]
 
-        # a_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # a_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        a_t = tf.cast(p1[0][:, 2], pinn.dtype)
+        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
+        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
+        u_t = tf.cast(p1[0][:, 2], pinn.dtype)
 
-        a_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        a_yy = tf.cast(p2[0][:, 1], pinn.dtype)
+        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
+        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
 
-        # s_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # s_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        s_t = tf.cast(p1[1][:, 2], pinn.dtype)
+        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
+        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
+        v_t = tf.cast(p1[1][:, 2], pinn.dtype)
 
-        s_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        s_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
+        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
 
-        D_a = self.D_a
-        D_s = self.D_s
-        sigma_a = self.sigma_a
-        sigma_s = self.sigma_s
-        mu_a = self.mu_a
-        rho_a = self.rho_a
-        rho_s = self.rho_s
-        kappa_a = self.kappa_a
+        D_u = self.D_u
+        D_v = self.D_v
+        sigma_u = self.sigma_u
+        sigma_v = self.sigma_v
+        mu_u = self.mu_u
+        rho_u = self.rho_u
+        rho_v = self.rho_v
+        kappa_u = self.kappa_u
 
-        f = a * a * s / (1.0 + kappa_a * a * a)
-        f_a = a_t - D_a * (a_xx + a_yy) - rho_a * f + mu_a * a - sigma_a
-        f_s = s_t - D_s * (s_xx + s_yy) + rho_s * f - sigma_s
+        f = u * u * v / (1.0 + kappa_u * u * u)
+        f_u = u_t - D_u * (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
+        f_v = v_t - D_v * (v_xx + v_yy) + rho_v * f - sigma_v
 
-        return outputs, f_a, f_s
+        return outputs, f_u, f_v
 
 
 class Schnakenberg(Loss):
@@ -606,14 +606,14 @@ class ASDM_steady(ASDM):
         s_xx = tf.cast(p2[1][:, 0], pinn.dtype)
         s_yy = tf.cast(p2[1][:, 1], pinn.dtype)
 
-        D_a = self.D_a
-        D_s = self.D_s
-        sigma_a = self.sigma_a
-        sigma_s = self.sigma_s
-        mu_a = self.mu_a
-        rho_a = self.rho_a
-        rho_s = self.rho_s
-        kappa_a = self.kappa_a
+        D_a = self.D_u
+        D_s = self.D_v
+        sigma_a = self.sigma_u
+        sigma_s = self.sigma_v
+        mu_a = self.mu_u
+        rho_a = self.rho_u
+        rho_s = self.rho_v
+        kappa_a = self.kappa_u
 
         f = a * a * s / (1.0 + kappa_a * a * a)
         f_a = -D_a * (a_xx + a_yy) - rho_a * f + mu_a * a - sigma_a
