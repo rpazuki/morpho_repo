@@ -406,6 +406,8 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
             plt.plot(results[f"grads_obs_{name}"][start:end], label=f"Grad obs {name}")
         for name in node_names:
             plt.plot(results[f"grads_pde_{name}"][start:end], label=f"Grad PDE {name}")
+        for name in node_names:
+            plt.plot(results[f"grad_norm_pde_params_{name}"][start:end], label=f"Grad PDE params {name}")
         _closing_commands_()
 
     if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
@@ -415,6 +417,8 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
             plt.plot(results[f"lambda_obs_{name}"][start:end], label=r"$\lambda$" f" obs {name}")
         for name in node_names:
             plt.plot(results[f"lambda_pde_{name}"][start:end], label=r"$\lambda$" f" PDE {name}")
+        for name in node_names:
+            plt.plot(results[f"lambda_pde_params_{name}"][start:end], label=r"$\lambda$" f" PDE params {name}")
         _closing_commands_()
 
     if param_names is not None:
