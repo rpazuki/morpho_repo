@@ -545,6 +545,7 @@ class TINN_inverse:
         pinn: NN,
         pde_loss: Loss,
         extra_loss=[],
+        non_zero_loss=None,
         optimizer=keras.optimizers.Adam(),
         train_acc_metric=keras.metrics.MeanSquaredError(),
         alpha=0.5,
@@ -558,6 +559,7 @@ class TINN_inverse:
     ):
         self.pinn = pinn
         self.pde_loss = pde_loss
+        self.non_zero_loss = non_zero_loss
         self.pde_params_len = len(self.pde_loss.trainables())
         self.extra_loss = extra_loss
         self.extra_loss_len = len(extra_loss)
@@ -603,6 +605,8 @@ class TINN_inverse:
         self.loss_pde_v = 0
         self.loss_extra = np.zeros(self.extra_loss_len)
         self.train_acc = 0
+        self.loss_non_zero = 0
+        self.loss_pde_params = 0
 
     @tf.function
     def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step):
@@ -616,7 +620,7 @@ class TINN_inverse:
             loss_obs_v = tf.reduce_mean(tf.square(y_obs[:, 1] - outputs[:, 1]))
             loss_pde_u = tf.reduce_mean(tf.square(f_u))
             loss_pde_v = tf.reduce_mean(tf.square(f_v))
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            trainables = self.pinn.trainable_variables  # + self.pde_loss.trainables()
             if self.extra_loss_len > 0:
                 loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
@@ -626,61 +630,70 @@ class TINN_inverse:
                 loss_extra_items = []
                 loss_extra = 0.0
 
-            # loss_value = loss_obs_u + loss_obs_v + loss_pde_u + loss_pde_v + loss_extra
-            # loss_value = (
-            #     self.lambda_obs_u * loss_obs_u
-            #     + self.lambda_obs_v * loss_obs_v
-            #     + self.lambda_pde_u * loss_pde_u
-            #     + self.lambda_pde_v * loss_pde_v
-            #     + loss_extra
-            # )
             loss_reg = (
                 self.lambda_obs_pre_u * self.lambda_obs_u * loss_obs_u
                 + self.lambda_obs_pre_v * self.lambda_obs_v * loss_obs_v
                 + self.lambda_pde_pre_u * self.lambda_pde_u * loss_pde_u
                 + self.lambda_pde_pre_v * self.lambda_pde_v * loss_pde_v
+                + loss_extra
             )
             loss_pde_params_reg = (
                 self.lambda_pde_pre_params_u * self.lambda_pde_params_u * loss_pde_u
                 + self.lambda_pde_pre_params_v * self.lambda_pde_params_v * loss_pde_v
             )
+            if self.non_zero_loss is not None:
+                non_zero_loss_value = self.non_zero_loss.loss(self.pinn, None)
+            else:
+                non_zero_loss_value = 0
 
         if update_lambdas:
             self.__update_lambdas__(
                 first_step, last_step, tape, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, trainables
             )
-        grads = tape.gradient(loss_reg, self.pinn.trainable_variables)
-        grads_extra = tape.gradient(loss_extra, extra_loss.trainables())
+        # trainables are just pinns W and any extra from params from extra_loss
+        # The pde coeffs are not included
+        grads = tape.gradient(loss_reg, trainables)
+        # loss_pde_params_reg is speratly regularised and updates the pde params
         grads_params = tape.gradient(loss_pde_params_reg, self.pde_loss.trainables())
-        # print(tape.gradient(loss_value, trainables))
-        # print("==============")
-        # print((grads_obs_u + grads_obs_v, grads_pde_u + grads_pde_v, grads_params))
+        #  None-zero parameter requlirisation
+        if self.non_zero_loss is not None:
+            grads_non_zero = tape.gradient(non_zero_loss_value, self.non_zero_loss.parameters)
 
-        self.optimizer.apply_gradients(zip(grads, self.pinn.trainable_variables))
-        self.optimizer.apply_gradients(zip(grads_extra, extra_loss.trainables()))
+        self.optimizer.apply_gradients(zip(grads, trainables))
         self.optimizer.apply_gradients(zip(grads_params, self.pde_loss.trainables()))
+        if self.non_zero_loss is not None:
+            self.optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
 
         # grads = tape.gradient(loss_value, trainables)
         # self.optimizer.apply_gradients(zip(grads, trainables))
         self.train_acc_metric.update_state(y_obs, outputs)
-        return loss_reg, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, loss_extra_items
+        return (
+            loss_reg,
+            loss_obs_u,
+            loss_obs_v,
+            loss_pde_u,
+            loss_pde_v,
+            non_zero_loss_value,
+            loss_extra_items,
+            loss_pde_params_reg,
+        )
 
     def __update_lambdas__(
         self, first_step, last_step, tape, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, trainables
     ):
-        grad_obs_u = tape.gradient(loss_obs_u, self.pinn.trainable_variables)
-        grad_obs_v = tape.gradient(loss_obs_v, self.pinn.trainable_variables)
-        grad_pde_u = tape.gradient(loss_pde_u, self.pinn.trainable_variables)
-        grad_pde_v = tape.gradient(loss_pde_v, self.pinn.trainable_variables)
+        grad_obs_u = tape.gradient(loss_obs_u, trainables)
+        grad_obs_v = tape.gradient(loss_obs_v, trainables)
+        grad_pde_u = tape.gradient(loss_pde_u, trainables)
+        grad_pde_v = tape.gradient(loss_pde_v, trainables)
         grad_pde_params_u = tape.gradient(loss_pde_u, self.pde_loss.trainables())
         grad_pde_params_v = tape.gradient(loss_pde_v, self.pde_loss.trainables())
 
-        temp_1 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_u])
-        temp_2 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_obs_v])
-        temp_3 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_u])
-        temp_4 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_v])
-        temp_5 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_params_u])
-        temp_6 = tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_pde_params_v])
+        temp_1 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_obs_u])
+        temp_2 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_obs_v])
+        temp_3 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_pde_u])
+        temp_4 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_pde_v])
+        temp_5 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_pde_params_u])
+        temp_6 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_pde_params_v])
 
         if first_step:
             self.grad_norm_obs_u.assign(temp_1)
@@ -778,7 +791,9 @@ class TINN_inverse:
                     loss_obs_v_batch,
                     loss_pde_u_batch,
                     loss_pde_v_batch,
+                    loss_non_zero_batch,
                     loss_extra_batch,
+                    loss_pde_params_reg_batch,
                 ) = self.__train_step__(
                     x_batch_train, y_batch_train, p_batch_train, regularise, step == 0, step == last_step
                 )
@@ -797,6 +812,8 @@ class TINN_inverse:
                 self.loss_pde_v += loss_pde_v_batch * w_pde
                 total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
                 self.loss_extra += total_loss_extra_batch * w_obs
+                self.loss_non_zero += loss_non_zero_batch
+                self.loss_pde_params += loss_pde_params_reg_batch * w_pde
                 self.loss_total += (
                     loss_obs_u_batch * w_obs
                     + loss_obs_v_batch * w_obs
@@ -806,6 +823,7 @@ class TINN_inverse:
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
+            self.loss_non_zero = self.loss_non_zero / (last_step + 1)
             # update the samples
             self.__store_samples__(
                 samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
@@ -837,6 +855,7 @@ class TINN_inverse:
                 **{
                     "loss_total": np.zeros(epochs),
                     "loss_regularisd_total": np.zeros(epochs),
+                    "loss_pde_params": np.zeros(epochs),
                     "loss_obs_u": np.zeros(epochs),
                     "loss_obs_v": np.zeros(epochs),
                     "loss_pde_u": np.zeros(epochs),
@@ -870,6 +889,11 @@ class TINN_inverse:
                     "grad_norm_pde_params_v": np.zeros(epochs),
                 },
             }
+        if self.non_zero_loss is not None:
+            ret = {
+                **ret,
+                **{"loss_non_zero": np.zeros(epochs)},
+            }
         if sample_parameters:
             for param in self.pde_loss.trainables():
                 ret[f"{param.name.split(':')[0]}"] = np.zeros(epochs)
@@ -882,6 +906,7 @@ class TINN_inverse:
         if sample_losses:
             samples["loss_total"][epoch] = self.loss_total
             samples["loss_regularisd_total"][epoch] = self.loss_reg_total
+            samples["loss_pde_params"][epoch] = self.loss_pde_params
             samples["loss_obs_u"][epoch] = self.loss_obs_u
             samples["loss_obs_v"][epoch] = self.loss_obs_v
             samples["loss_pde_u"][epoch] = self.loss_pde_u
@@ -905,6 +930,8 @@ class TINN_inverse:
             samples["grad_norm_pde_params_u"][epoch] = np.sqrt(self.grad_norm_pde_params_u.numpy())
             samples["grad_norm_pde_params_v"][epoch] = np.sqrt(self.grad_norm_pde_params_v.numpy())
 
+        if self.non_zero_loss is not None:
+            samples["loss_non_zero"][epoch] = self.loss_non_zero
         if sample_parameters:
             for param in self.pde_loss.trainables():
                 samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
@@ -923,6 +950,9 @@ class TINN_inverse:
             f"pde u loss: {self.loss_pde_u:{self.print_precision}}, "
             f"pde v loss: {self.loss_pde_v:{self.print_precision}}"
         )
+        print(f"pde params loss: {self.loss_pde_params:{self.print_precision}}")
+        if self.non_zero_loss is not None:
+            print(f"Non-zero loss: {self.loss_non_zero:{self.print_precision}}, ")
         print(
             f"lambda obs u: {self.lambda_obs_u.numpy():{self.print_precision}}, "
             f"lambda obs v: {self.lambda_obs_v.numpy():{self.print_precision}}"

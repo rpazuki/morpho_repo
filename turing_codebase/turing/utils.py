@@ -379,6 +379,11 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
             plt.plot(results[f"loss_pde_{name}"][start:end], label=f"PDE {name}")
         for key in [k for k in results.keys() if k.startswith("loss_extra_")]:
             plt.plot(results[key][start:end], label=f"{key}")
+        _closing_commands_()
+
+    if "loss_non_zero" in results.keys():
+        _ = plt.figure(figsize=(14, 5))
+        plt.plot(results["loss_non_zero"][start:end], label="loss_non_zero")
 
         _closing_commands_()
 
@@ -406,8 +411,9 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
             plt.plot(results[f"grads_obs_{name}"][start:end], label=f"Grad obs {name}")
         for name in node_names:
             plt.plot(results[f"grads_pde_{name}"][start:end], label=f"Grad PDE {name}")
-        for name in node_names:
-            plt.plot(results[f"grad_norm_pde_params_{name}"][start:end], label=f"Grad PDE params {name}")
+        if np.any([True if k.startswith("grad_norm_pde_params_") else False for k in results.keys()]):
+            for name in node_names:
+                plt.plot(results[f"grad_norm_pde_params_{name}"][start:end], label=f"Grad PDE params {name}")
         _closing_commands_()
 
     if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
@@ -417,8 +423,9 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
             plt.plot(results[f"lambda_obs_{name}"][start:end], label=r"$\lambda$" f" obs {name}")
         for name in node_names:
             plt.plot(results[f"lambda_pde_{name}"][start:end], label=r"$\lambda$" f" PDE {name}")
-        for name in node_names:
-            plt.plot(results[f"lambda_pde_params_{name}"][start:end], label=r"$\lambda$" f" PDE params {name}")
+        if np.any([True if k.startswith("lambda_pde_params_") else False for k in results.keys()]):
+            for name in node_names:
+                plt.plot(results[f"lambda_pde_params_{name}"][start:end], label=r"$\lambda$" f" PDE params {name}")
         _closing_commands_()
 
     if param_names is not None:
