@@ -15,3 +15,5 @@ growth/saved_models/**
 growth/saved_models/**/*
 growth/saved_models/*.pkl
 20201026 JM204_Cell2_stim_uropod_Export_CellLight_OpTool.mat
+solver/turring_weird.gif
+solver/turring_weird2.gif
