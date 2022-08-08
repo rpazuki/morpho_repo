@@ -434,3 +434,78 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
         for name in param_names:
             plt.plot(results[f"{name}"][start:end], label=f"{name}")
         _closing_commands_()
+
+
+def plot_result_multi_nodes(
+    results, param_names=None, start=0, end=-1, node_names=["u", "v"], yscale="log", y_lims=None
+):
+    import matplotlib.pyplot as plt
+
+    def _closing_commands_():
+        plt.legend()
+        plt.grid()
+        plt.xlabel("Iterations")
+        plt.yscale(yscale)
+        if y_lims is not None:
+            plt.ylim(y_lims)
+        plt.show()
+
+    _ = plt.figure(figsize=(14, 5))
+    plt.title("Training accuracy for observations")
+    plt.plot(results["training_obs_accuracy"][start:end], label="accuracy")
+    _closing_commands_()
+
+    if np.any([True if k.startswith("loss_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title("Real Loss")
+        plt.plot(results["loss_total"][start:end], label="total")
+        for i, name in enumerate(node_names):
+            plt.plot(results["loss_obs"][start:end, i], label=f"Obs {name}")
+        for i, name in enumerate(node_names):
+            plt.plot(results["loss_pde"][start:end, i], label=f"PDE {name}")
+        for key in [k for k in results.keys() if k.startswith("loss_extra_")]:
+            plt.plot(results[key][start:end], label=f"{key}")
+
+        _closing_commands_()
+
+    if np.any([True if k.startswith("loss_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title("Regularisd Loss")
+        plt.plot(results["loss_regularisd_total"][start:end], label="total")
+        if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
+            for i, name in enumerate(node_names):
+                plt.plot(
+                    results["lambda_obs"][start:end, i] * results["loss_obs"][start:end, i],
+                    label=f"Obs {name}",
+                )
+            for i, name in enumerate(node_names):
+                plt.plot(
+                    results["lambda_pde"][start:end, i] * results["loss_pde"][start:end, i],
+                    label=f"PDE {name}",
+                )
+        _closing_commands_()
+
+    if np.any([True if k.startswith("grads_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title("Gradient Norms")
+        for i, name in enumerate(node_names):
+            plt.plot(results["grads_obs"][start:end, i], label=f"Grad obs {name}")
+        for i, name in enumerate(node_names):
+            plt.plot(results["grads_pde"][start:end, i], label=f"Grad PDE {name}")
+        _closing_commands_()
+
+    if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
+        _ = plt.figure(figsize=(14, 5))
+        plt.title(r"$\lambda$s")
+        for i, name in enumerate(node_names):
+            plt.plot(results["lambda_obs"][start:end, i], label=r"$\lambda$" f" obs {name}")
+        for i, name in enumerate(node_names):
+            plt.plot(results["lambda_pde"][start:end, i], label=r"$\lambda$" f" PDE {name}")
+        _closing_commands_()
+
+    if param_names is not None:
+        _ = plt.figure(figsize=(14, 5))
+        plt.title(r"Estimated parameters")
+        for name in param_names:
+            plt.plot(results[f"{name}"][start:end], label=f"{name}")
+        _closing_commands_()
