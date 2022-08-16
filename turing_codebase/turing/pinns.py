@@ -215,7 +215,7 @@ class TINN:
         self.extra_loss_len = len(extra_loss)
         self.optimizer = optimizer
         self.train_acc_metric = train_acc_metric
-        self.alpha = alpha
+        self.alpha = tf.Variable(alpha, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
         #
         self.lambda_obs_u = tf.Variable(1.0, dtype=pinn.dtype, trainable=False)

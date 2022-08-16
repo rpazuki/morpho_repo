@@ -33,7 +33,7 @@ def indices(batch_size: int, shuffle: bool = True, *ns):
     batch_steps = batch_steps + (n1 - 1) // (batch_steps * batch_size)
     # remaining indices
     indices_batch_size = [n_i // batch_steps for n_i in ns_remain]
-    indices_batch_size = [size + (batch_size // size) * (batch_size % size) for size in indices_batch_size]
+    # indices_batch_size = [size + (batch_size // size) * (batch_size % size) for size in indices_batch_size]
 
     # indices
     indices = [np.array(list(range(n_i))) for n_i in ns]
@@ -328,28 +328,49 @@ def merge_dict(dict_1, *dicts):
     return ret
 
 
-def merge_dict_multi_nodes(node_names, *dicts):
+def merge_dict_multi_nodes(dict_1, *dicts):
     """Imutable merge of dictionary objects"""
     ret = {}
-    for d in dicts:
-        for key in d.keys():
-            # 1D arrays
-            if len(d[key].shape) == 1:
-                if key not in ret.keys():
-                    ret[key] = d[key]
-                else:
-                    ret[key] = np.concatenate((ret[key], d[key]), axis=0)
-            else:  # 2d Arrays
-                if key not in ret.keys():
-                    d_2_d = d[key]
-                    for i, name in enumerate(node_names):
-                        ret[f"{key}_{name}"] = d_2_d[i]
-                else:
-                    d_2_d = d[key]
-                    for i, name in enumerate(node_names):
-                        ret[f"{key}_{name}"] = np.concatenate((ret[f"{key}_{name}"], d_2_d[i]), axis=0)
+    all_dicts = [dict_1, *dicts]
+    for key in dict_1.keys():
+        ret[key] = np.concatenate([dict_i[key] for dict_i in all_dicts])
 
     return ret
+
+
+# def merge_dict_multi_nodes(node_names, *dicts):
+#     """Imutable merge of dictionary objects"""
+#     ret = {}
+#     for d in dicts:
+#         for key in d.keys():
+#             # 1D arrays
+#             if len(d[key].shape) == 1:
+#                 if key not in ret.keys():
+#                     ret[key] = d[key]
+#                 else:
+#                     ret[key] = np.concatenate((ret[key], d[key]), axis=0)
+#             else:  # 2d Arrays
+#                 if key not in ret.keys():
+#                     d_2_d = d[key]
+#                     for i, name in enumerate(node_names):
+#                         ret[f"{key}_{name}"] = d_2_d[i]
+#                 else:
+#                     d_2_d = d[key]
+#                     for i, name in enumerate(node_names):
+#                         ret[f"{key}_{name}"] = np.concatenate((ret[f"{key}_{name}"], d_2_d[i]), axis=0)
+
+#     return ret
+
+
+# def merge_dict_multi_nodes2(dict_1, *dicts):
+#     """Imutable merge of dictionary objects"""
+#     ret = {}
+#     all_dicts = [dict_1, *dicts]
+#     for key in dict_1.keys():
+#         print(key)
+#         ret[key] = np.vstack([dict_i[key] for dict_i in all_dicts])
+
+#     return ret
 
 
 def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"], yscale="log", y_lims=None):
@@ -437,7 +458,13 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
 
 
 def plot_result_multi_nodes(
-    results, param_names=None, start=0, end=-1, node_names=["u", "v"], yscale="log", y_lims=None
+    results,
+    param_names=None,
+    start=0,
+    end=-1,
+    node_names=["u", "v"],
+    yscale="log",
+    y_lims=None,
 ):
     import matplotlib.pyplot as plt
 

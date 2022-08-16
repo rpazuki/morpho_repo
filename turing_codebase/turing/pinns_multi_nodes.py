@@ -33,7 +33,7 @@ class TINN_multi_nodes:
 
         self.optimizer = optimizer
         self.train_acc_metric = train_acc_metric
-        self.alpha = alpha
+        self.alpha = tf.Variable(alpha, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
         #
         self.lambdas = [tf.Variable(1.0, dtype=pinn.dtype, trainable=False) for i in range(nodes_n * 2)]
