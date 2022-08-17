@@ -13,11 +13,11 @@ def lprint(latex_str, *elements):
     display(Latex(s))
     
     
-def plot_quadratic(b, c, ax):
+def plot_quadratic(b, c, ax, title):
     
     def eq(x):
         return x**2 - b * x + c
-    
+    # Calulates parameters
     λ_m = b/2
     Δ = λ_m**2 - c
     if Δ >= 0:
@@ -28,17 +28,40 @@ def plot_quadratic(b, c, ax):
         λ_p = λ_m + np.sqrt(-Δ)
     λs = np.linspace(λ_n - .2, λ_p + .2, num=100)
     lims = [np.min(λs), np.max(λs) ]
+    lims_y = [np.min(eq(λs)), np.max(eq(λs)) ]
     length = lims[1] - lims[0]
+    length_y = lims_y[1] - lims_y[0]
     f_p_max = eq(lims[1])
-    
-    
-    plt.plot(λs, eq(λs))
-    
-    plt.hlines(0, lims[0], lims[1], 'r', '--', alpha=.4)
     f_m = eq(λ_m)
-    plt.vlines(λ_m, 0, f_m,'r', '--', alpha=.4)
-    plt.xlim(lims)
-    #plt.xlim([-2, 2])
+    # Plots
+    ax.plot(λs, eq(λs))
+    
+    ax.axis('off')
+    # X axis
+    ax.arrow(min(lims[0], -0.1), 0, 
+              max(max(length, lims[1]),0.1-min(lims[0], -0.1)), 0, 
+              width = 0.01, 
+              head_width = 0.05,
+              alpha=.8)
+    # X axis label
+    ax.annotate(r"$\lambda$", 
+                xy=(max(lims[1], 0.2), 0.1),
+                textcoords='data',
+               fontsize=18)
+    # Y axis
+    ax.arrow(0, min(lims_y[0], -0.2), 
+              0, max(length_y, lims_y[1]), 
+              width = 0.01,
+              head_width = 0.05,
+              alpha=.8)
+    # Y axis label
+    ax.annotate(r"f($\lambda$)", 
+                xy=( 0.05, max(f_m, lims_y[1])),
+                textcoords='data',
+               fontsize=18)
+    # f(λ_m)
+    ax.vlines(λ_m, 0, f_m,'r', '--', alpha=.4)    
+    
     ax.annotate(r"$\lambda_m = \frac{b}{2}$", xy=(λ_m, 0.0),
              xycoords='data',
              xytext=(λ_m*1.3, f_m*0.5),
@@ -61,7 +84,7 @@ def plot_quadratic(b, c, ax):
     if Δ >= 0:
         ax.annotate(r"$\lambda_{-} = \lambda_m - \sqrt{\lambda_m^2 - c}$", xy=(λ_n, 0.0),
              xycoords='data',
-             xytext=(λ_m - length/3, f_p_max/2),
+             xytext=(λ_m - length/2.5, f_p_max/2),
              textcoords='data',
              fontsize=14,
              arrowprops=dict(arrowstyle= '-|>',
@@ -72,7 +95,7 @@ def plot_quadratic(b, c, ax):
 
         ax.annotate(r"$\lambda_{+} = \lambda_m + \sqrt{\lambda_m^2 - c}$", xy=(λ_p, 0.0),
              xycoords='data',
-             xytext=(λ_m + length/10, f_p_max/2),
+             xytext=(λ_m + length/14, f_p_max/2),
              textcoords='data',
              fontsize=14,
              arrowprops=dict(arrowstyle= '-|>',
@@ -80,7 +103,6 @@ def plot_quadratic(b, c, ax):
                              lw=2.5,
                              ls='--')
            )
-    
-    plt.grid()
-    plt.xlabel(r"$\lambda$", fontsize=14)
-    plt.ylabel(r"$f(\lambda)$", fontsize=14)
+    #Title
+    ax.text(λ_m - length/12, lims_y[1] *1.05, title, color='black', fontsize=14,
+        bbox=dict(boxstyle='square,pad=.5',facecolor='none', edgecolor='red'))
