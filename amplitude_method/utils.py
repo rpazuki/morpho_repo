@@ -106,3 +106,25 @@ def plot_quadratic(b, c, ax, title):
     #Title
     ax.text(λ_m - length/12, lims_y[1] *1.05, title, color='black', fontsize=14,
         bbox=dict(boxstyle='square,pad=.5',facecolor='none', edgecolor='red'))
+
+def plot_two_levels(ax, 
+                    domain, 
+                    extent_L, 
+                    xlabel, ylabel,
+                    level,
+                    level_names
+                   ):
+    d = domain.copy()
+    d[d <= level] = -1
+    d[d > level] = 0
+    img = ax.imshow(d,
+                    extent=[-extent_L, extent_L, -extent_L, extent_L],
+                    origin='lower',
+                    cmap='RdPu',
+                    alpha=.5)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(xlabel)
+    cbar = plt.colorbar(img, ax=ax)
+    cbar.set_ticks([-1, 0])
+    cbar.set_ticklabels(level_names)
+    plt.grid()
