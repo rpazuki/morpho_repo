@@ -1,7 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import colors
 from sympy import latex
 from IPython.display import display, Latex
+
 
 def hprint(header, obj):
     display(Latex(r"$" + header + latex(obj)+r"$") )
@@ -109,22 +111,40 @@ def plot_quadratic(b, c, ax, title):
 
 def plot_two_levels(ax, 
                     domain, 
-                    extent_L, 
+                    extent, 
                     xlabel, ylabel,
                     level,
-                    level_names
+                    level_names,
+                    color='green'
                    ):
     d = domain.copy()
     d[d <= level] = -1
     d[d > level] = 0
+    level_nums = 0
+    if np.all(d == -1):
+        cmap = colors.ListedColormap(['white'])
+        level_nums = 0
+    elif np.all(d == 0):
+        cmap = colors.ListedColormap([color])
+        level_nums = 1
+    else:
+        cmap = colors.ListedColormap(['white', color])
+        level_nums = 2
     img = ax.imshow(d,
-                    extent=[-extent_L, extent_L, -extent_L, extent_L],
+                    extent=extent,
                     origin='lower',
-                    cmap='RdPu',
+                    cmap=cmap,
                     alpha=.5)
     ax.set_xlabel(xlabel)
-    ax.set_ylabel(xlabel)
+    ax.set_ylabel(ylabel)
     cbar = plt.colorbar(img, ax=ax)
-    cbar.set_ticks([-1, 0])
-    cbar.set_ticklabels(level_names)
+    if level_nums == 0:
+        cbar.set_ticks([-1])
+        cbar.set_ticklabels([level_names[0]])
+    elif level_nums == 1:
+        cbar.set_ticks([0])
+        cbar.set_ticklabels([level_names[1]])
+    else:
+        cbar.set_ticks([-1, 0])
+        cbar.set_ticklabels(level_names)
     plt.grid()
