@@ -10,8 +10,11 @@ def hprint(header, obj):
     
 def lprint(latex_str, *elements):
     s = latex_str
-    for i, e in enumerate(elements):        
-        s = s.replace(f"{{{i}}}", r"$" + e +r"$")
+    for i, e in enumerate(elements):
+        try:
+            s = s.replace(f"{{{i}}}", r"$" + e +r"$")
+        except TypeError:
+            s = s.replace(f"{{{i}}}", r"$" + latex(e) +r"$")
     display(Latex(s))
     
     

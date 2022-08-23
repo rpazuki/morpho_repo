@@ -467,7 +467,7 @@ class Circuit2_variant5716(Loss):
         def add_trainable(param, param_name):
             if param is None:
                 v = tf.Variable(
-                    [init_value], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-10, 1e10)
+                    [init_value], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
                 )
                 self._trainables_ += (v,)
                 setattr(self, param_name, v)
