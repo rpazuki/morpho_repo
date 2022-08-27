@@ -536,3 +536,76 @@ def plot_result_multi_nodes(
         for name in param_names:
             plt.plot(results[f"{name}"][start:end], label=f"{name}")
         _closing_commands_()
+
+
+# This code is originally from TF Source code
+class ReduceLROnPlateau:
+    """Reduce learning rate when a metric has stopped improving.
+    Models often benefit from reducing the learning rate by a factor
+    of 2-10 once learning stagnates. This callback monitors a
+    quantity and if no improvement is seen for a 'patience' number
+    of epochs, the learning rate is reduced.
+    ```
+    Args:
+        factor: factor by which the learning rate will be reduced.
+          `new_lr = lr * factor`.
+        patience: number of epochs with no improvement after which learning rate
+          will be reduced.
+        min_delta: threshold for measuring the new optimum, to only focus on
+          significant changes.
+        cooldown: number of epochs to wait before resuming normal operation after
+          lr has been reduced.
+        min_lr: lower bound on the learning rate.
+    """
+
+    def __init__(
+        self, optimizer, monitor="training_obs_accuracy", factor=0.1, patience=10, min_delta=1e-4, cooldown=0, min_lr=0
+    ):
+
+        if factor >= 1.0:
+            raise ValueError(f"ReduceLROnPlateau does not support a factor >= 1.0. Got {factor}")
+        self.optimizer = optimizer
+        self.factor = factor
+        self.min_lr = min_lr
+        self.min_delta = min_delta
+        self.patience = patience
+        self.cooldown = cooldown
+        self.cooldown_counter = 0  # Cooldown counter.
+        self.wait = 0
+        self.best = 0
+        self.monitor = monitor
+        self.monitor_op = None
+        self._reset()
+
+    def _reset(self):
+        """Resets wait counter and cooldown counter."""
+        self.monitor_op = lambda a, b: np.less(a, b - self.min_delta)
+        self.best = np.Inf
+        self.cooldown_counter = 0
+        self.wait = 0
+
+    def on_epoch_end(self, epoch, samples):
+        current = samples[self.monitor][epoch]
+        if self.in_cooldown():
+            self.cooldown_counter -= 1
+            self.wait = 0
+
+        if self.monitor_op(current, self.best):
+            self.best = current
+            self.wait = 0
+        elif not self.in_cooldown():
+            self.wait += 1
+            if self.wait >= self.patience:
+                old_lr = self.optimizer.lr.numpy()
+                if old_lr > np.float32(self.min_lr):
+                    new_lr = old_lr * self.factor
+                    new_lr = max(new_lr, self.min_lr)
+                    print("========================================================")
+                    print("Update learining rate " f"from {old_lr:.3e} to {new_lr:.3e}")
+                    print("========================================================")
+                    self.optimizer.lr.assign(new_lr)
+                    self.cooldown_counter = self.cooldown
+                    self.wait = 0
+
+    def in_cooldown(self):
+        return self.cooldown_counter > 0

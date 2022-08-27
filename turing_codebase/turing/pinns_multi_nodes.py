@@ -134,6 +134,7 @@ class TINN_multi_nodes:
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
+        epoch_callback=None,
     ):
 
         # Samplling arrays
@@ -188,6 +189,8 @@ class TINN_multi_nodes:
             self._store_samples_(
                 samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
             )
+            if epoch_callback is not None:
+                epoch_callback(epoch, samples)
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()
