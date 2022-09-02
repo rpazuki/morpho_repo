@@ -207,6 +207,7 @@ class TINN:
         optimizer=keras.optimizers.Adam(),
         train_acc_metric=keras.metrics.MeanSquaredError(),
         alpha=0.5,
+        loss_penalty_power=2,
         print_precision=".5f",
     ):
         self.pinn = pinn
@@ -216,6 +217,7 @@ class TINN:
         self.optimizer = optimizer
         self.train_acc_metric = train_acc_metric
         self.alpha = tf.Variable(alpha, dtype=pinn.dtype, trainable=False)
+        self.loss_penalty_power = tf.Variable(loss_penalty_power, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
         #
         self.lambda_obs_u = tf.Variable(1.0, dtype=pinn.dtype, trainable=False)
@@ -314,21 +316,25 @@ class TINN:
             self.loss_norm_pde_v.assign(loss_pde_v)
 
         else:
-            self.grad_norm_obs_u.assign(self.grad_norm_obs_u + temp_1)
-            self.grad_norm_obs_v.assign(self.grad_norm_obs_v + temp_2)
-            self.grad_norm_pde_u.assign(self.grad_norm_pde_u + temp_3)
-            self.grad_norm_pde_v.assign(self.grad_norm_pde_v + temp_4)
+            self.grad_norm_obs_u.assign_add(temp_1)
+            self.grad_norm_obs_v.assign_add(temp_2)
+            self.grad_norm_pde_u.assign_add(temp_3)
+            self.grad_norm_pde_v.assign_add(temp_4)
 
-            self.loss_norm_obs_u.assign(self.loss_norm_obs_u + loss_obs_u)
-            self.loss_norm_obs_v.assign(self.loss_norm_obs_v + loss_obs_v)
-            self.loss_norm_pde_u.assign(self.loss_norm_pde_u + loss_pde_u)
-            self.loss_norm_pde_v.assign(self.loss_norm_pde_v + loss_pde_v)
+            self.loss_norm_obs_u.assign_add(loss_obs_u)
+            self.loss_norm_obs_v.assign_add(loss_obs_v)
+            self.loss_norm_pde_u.assign_add(loss_pde_u)
+            self.loss_norm_pde_v.assign_add(loss_pde_v)
 
         if last_step:
-            w_1 = self.loss_norm_obs_u**2 / tf.sqrt(self.grad_norm_obs_u)
-            w_2 = self.loss_norm_obs_v**2 / tf.sqrt(self.grad_norm_obs_v)
-            w_3 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_u)
-            w_4 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_v)
+            # w_1 = self.loss_norm_obs_u**2 / tf.sqrt(self.grad_norm_obs_u)
+            # w_2 = self.loss_norm_obs_v**2 / tf.sqrt(self.grad_norm_obs_v)
+            # w_3 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_u)
+            # w_4 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_v)
+            w_1 = tf.pow(self.loss_norm_obs_u, self.loss_penalty_power) / tf.sqrt(self.grad_norm_obs_u)
+            w_2 = tf.pow(self.loss_norm_obs_v, self.loss_penalty_power) / tf.sqrt(self.grad_norm_obs_v)
+            w_3 = tf.pow(self.loss_norm_pde_u, self.loss_penalty_power) / tf.sqrt(self.grad_norm_pde_u)
+            w_4 = tf.pow(self.loss_norm_pde_v, self.loss_penalty_power) / tf.sqrt(self.grad_norm_pde_v)
 
             w_total = w_1 + w_2 + w_3 + w_4
             self.lambda_obs_u.assign(self.alpha * self.lambda_obs_u + ((1 - self.alpha) * 4.0 * w_1) / w_total)

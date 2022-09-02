@@ -19,6 +19,7 @@ class TINN_multi_nodes:
         optimizer=keras.optimizers.Adam(),
         train_acc_metric=keras.metrics.MeanSquaredError(),
         alpha=0.5,
+        loss_penalty_power=2,
         print_precision=".5f",
     ):
         self.pinn = pinn
@@ -34,6 +35,7 @@ class TINN_multi_nodes:
         self.optimizer = optimizer
         self.train_acc_metric = train_acc_metric
         self.alpha = tf.Variable(alpha, dtype=pinn.dtype, trainable=False)
+        self.loss_penalty_power = tf.Variable(loss_penalty_power, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
         #
         self.lambdas = [tf.Variable(1.0, dtype=pinn.dtype, trainable=False) for i in range(nodes_n * 2)]
@@ -106,12 +108,13 @@ class TINN_multi_nodes:
 
         else:
             for i in range(self.nodes_n * 2):
-                self.grad_norms[i].assign(self.grad_norms[i] + reduced_grads[i])
+                self.grad_norms[i].assign_add(reduced_grads[i])
 
-                self.loss_norms[i].assign(self.loss_norms[i] + loss_items[i])
+                self.loss_norms[i].assign_add(loss_items[i])
 
         if last_step:
-            Ws = tf.square(self.loss_norms) / tf.sqrt(self.grad_norms)
+            # Ws = tf.square(self.loss_norms) / tf.sqrt(self.grad_norms)
+            Ws = tf.pow(self.loss_norms, self.loss_penalty_power) / tf.sqrt(self.grad_norms)
 
             w_total = tf.reduce_sum(Ws)
             for i in range(self.nodes_n * 2):
