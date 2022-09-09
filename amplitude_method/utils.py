@@ -118,7 +118,8 @@ def plot_two_levels(ax,
                     xlabel, ylabel,
                     level,
                     level_names,
-                    color='green'
+                    color='green',
+                    aspect=1
                    ):
     d = domain.copy()
     d[d <= level] = -1
@@ -135,6 +136,7 @@ def plot_two_levels(ax,
         level_nums = 2
     img = ax.imshow(d,
                     extent=extent,
+                    aspect=aspect,
                     origin='lower',
                     cmap=cmap,
                     alpha=.5)

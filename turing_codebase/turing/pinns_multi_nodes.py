@@ -19,14 +19,17 @@ class TINN_multi_nodes:
         optimizer=keras.optimizers.Adam(),
         train_acc_metric=keras.metrics.MeanSquaredError(),
         alpha=0.5,
-        loss_penalty_power=2,
+        loss_penalty_power=1,
         print_precision=".5f",
+        lambdas_pre=None,
+        log_loss=False,
     ):
         self.pinn = pinn
         self.extra_loss = extra_loss
         self.extra_loss_len = len(extra_loss)
         self.pde_loss = pde_loss
         self.nodes_n = nodes_n
+        self.log_loss = log_loss
         if node_names is None:
             self.node_names = [f"node_{i+1}" for i in range(nodes_n)]
         else:
@@ -38,6 +41,12 @@ class TINN_multi_nodes:
         self.loss_penalty_power = tf.Variable(loss_penalty_power, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
         #
+        if lambdas_pre is None:
+            self.lambdas_pre = tf.Variable([1.0 for i in range(nodes_n * 2)], dtype=pinn.dtype, trainable=False)
+        else:
+            assert len(lambdas_pre) == nodes_n * 2
+            self.lambdas_pre = tf.Variable([v for v in lambdas_pre], dtype=pinn.dtype, trainable=False)
+
         self.lambdas = [tf.Variable(1.0, dtype=pinn.dtype, trainable=False) for i in range(nodes_n * 2)]
 
         self.grad_norms = [tf.Variable(0.0, dtype=pinn.dtype, trainable=False) for i in range(nodes_n * 2)]
@@ -67,6 +76,8 @@ class TINN_multi_nodes:
             loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
             loss_pde = tf.reduce_mean(tf.square(f_pde), axis=1)
             loss_items = tf.concat([loss_obs, loss_pde], axis=0)
+            if self.log_loss:
+                loss_items = tf.math.log(loss_items)
 
             trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
             if self.extra_loss_len > 0:
@@ -76,7 +87,7 @@ class TINN_multi_nodes:
                 loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items) + tf.reduce_sum(loss_extra_items)
             else:
                 loss_extra_items = []
-                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
+                loss_value = tf.reduce_sum(tf.stack(self.lambdas_pre * self.lambdas) * loss_items)
 
         if update_lambdas:
             self._update_lambdas_(x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables)
@@ -189,6 +200,11 @@ class TINN_multi_nodes:
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = self.train_acc_metric.result()
+            if isinstance(self.train_acc_metric, keras.metrics.MeanSquaredError):
+                self.train_acc = np.sqrt(self.train_acc)
+            self.loss_total = np.sqrt(self.loss_total)
+            self.loss_obs = np.sqrt(self.loss_obs)
+            self.loss_pde = np.sqrt(self.loss_pde)
             self._store_samples_(
                 samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
             )
