@@ -1,3 +1,4 @@
+from re import A
 import time
 import tensorflow as tf
 from tensorflow import keras
@@ -76,18 +77,20 @@ class TINN_multi_nodes:
             loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
             loss_pde = tf.reduce_mean(tf.square(f_pde), axis=1)
             loss_items = tf.concat([loss_obs, loss_pde], axis=0)
+
             if self.log_loss:
-                loss_items = tf.math.log(loss_items)
+                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * tf.math.log(loss_items))
+            else:
+                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
 
             trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
             if self.extra_loss_len > 0:
                 loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
                     trainables += extra_loss.trainables()
-                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items) + tf.reduce_sum(loss_extra_items)
+                loss_value += tf.reduce_sum(loss_extra_items)
             else:
                 loss_extra_items = []
-                loss_value = tf.reduce_sum(tf.stack(self.lambdas_pre * self.lambdas) * loss_items)
 
         if update_lambdas:
             self._update_lambdas_(x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables)

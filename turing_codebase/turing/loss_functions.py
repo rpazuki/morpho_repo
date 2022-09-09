@@ -458,45 +458,73 @@ class Circuit2_variant5716(Loss):
         k_FE=None,
         mu_A=None,
         mulv_A=None,
+        D_A_val=None,
+        D_B_val=None,
+        b_A_val=None,
+        b_B_val=None,
+        b_C_val=None,
+        b_D_val=None,
+        b_E_val=None,
+        b_F_val=None,
+        V_A_val=None,
+        V_B_val=None,
+        V_C_val=None,
+        V_D_val=None,
+        V_E_val=None,
+        V_F_val=None,
+        k_AA_val=None,
+        k_BD_val=None,
+        k_CE_val=None,
+        k_DA_val=None,
+        k_EB_val=None,
+        k_EE_val=None,
+        k_FE_val=None,
+        mu_A_val=None,
+        mulv_A_val=None,
         print_precision=".5f",
     ):
         super().__init__(name="Circuit2_variant5716", print_precision=print_precision)
 
         self._trainables_ = ()
 
-        def add_trainable(param, param_name):
+        def add_trainable(param, param_name, param_val=None):
             if param is None:
-                v = tf.Variable(
-                    [init_value], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
-                )
+                if param_val is None:
+                    v = tf.Variable(
+                        [init_value], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
+                    )
+                else:
+                    v = tf.Variable(
+                        [param_val], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
+                    )
                 self._trainables_ += (v,)
                 setattr(self, param_name, v)
             else:
                 setattr(self, param_name, tf.constant(param, dtype=dtype, name=param_name))
 
-        add_trainable(D_A, "D_A")
-        add_trainable(D_B, "D_B")
-        add_trainable(b_A, "b_A")
-        add_trainable(b_B, "b_B")
-        add_trainable(b_C, "b_C")
-        add_trainable(b_D, "b_D")
-        add_trainable(b_E, "b_E")
-        add_trainable(b_F, "b_F")
-        add_trainable(V_A, "V_A")
-        add_trainable(V_B, "V_B")
-        add_trainable(V_C, "V_C")
-        add_trainable(V_D, "V_D")
-        add_trainable(V_E, "V_E")
-        add_trainable(V_F, "V_F")
-        add_trainable(k_AA, "k_AA")
-        add_trainable(k_BD, "k_BD")
-        add_trainable(k_CE, "k_CE")
-        add_trainable(k_DA, "k_DA")
-        add_trainable(k_EB, "k_EB")
-        add_trainable(k_EE, "k_EE")
-        add_trainable(k_FE, "k_FE")
-        add_trainable(mu_A, "mu_A")
-        add_trainable(mulv_A, "mulv_A")
+        add_trainable(D_A, "D_A", D_A_val)
+        add_trainable(D_B, "D_B", D_B_val)
+        add_trainable(b_A, "b_A", b_A_val)
+        add_trainable(b_B, "b_B", b_B_val)
+        add_trainable(b_C, "b_C", b_C_val)
+        add_trainable(b_D, "b_D", b_D_val)
+        add_trainable(b_E, "b_E", b_E_val)
+        add_trainable(b_F, "b_F", b_F_val)
+        add_trainable(V_A, "V_A", V_A_val)
+        add_trainable(V_B, "V_B", V_B_val)
+        add_trainable(V_C, "V_C", V_C_val)
+        add_trainable(V_D, "V_D", V_D_val)
+        add_trainable(V_E, "V_E", V_E_val)
+        add_trainable(V_F, "V_F", V_F_val)
+        add_trainable(k_AA, "k_AA", k_AA_val)
+        add_trainable(k_BD, "k_BD", k_BD_val)
+        add_trainable(k_CE, "k_CE", k_CE_val)
+        add_trainable(k_DA, "k_DA", k_DA_val)
+        add_trainable(k_EB, "k_EB", k_EB_val)
+        add_trainable(k_EE, "k_EE", k_EE_val)
+        add_trainable(k_FE, "k_FE", k_FE_val)
+        add_trainable(mu_A, "mu_A", mu_A_val)
+        add_trainable(mulv_A, "mulv_A", mulv_A_val)
 
     @tf.function
     def loss(self, pinn, x):
