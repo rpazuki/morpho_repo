@@ -1,4 +1,5 @@
 import time
+from black import out
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
@@ -631,6 +632,217 @@ class TINN_multi_nodes_masked2(TINN_multi_nodes):
             self._store_samples_(
                 samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
             )
+            # Display metrics at the end of each epoch.
+            if epoch % print_interval == 0:
+                self._print_metrics_()
+            if stop_threshold >= float(self.train_acc):
+                print("############################################")
+                print("#               Early stop                 #")
+                print("############################################")
+                return samples
+            # Reset training metrics at the end of each epoch
+            self.train_acc_metric.reset_states()
+            self._reset_losses_()
+            if epoch % print_interval == 0:
+                print(f"Time taken: {(time.time() - start_time):.2f}s")
+                start_time = time.time()
+            # end for epoch in range(epochs)
+
+        return samples
+
+
+class TINN_multi_nodes_masked3(TINN_multi_nodes):
+    """Turing-Informed Neural Net"""
+
+    def __init__(
+        self,
+        pinn: NN,
+        pde_loss: Loss,
+        extra_loss=[],
+        nodes_n=2,
+        node_names=None,
+        optimizer=keras.optimizers.Adam(),
+        train_acc_metric=keras.metrics.MeanSquaredError(),
+        alpha=0.5,
+        loss_penalty_power=1,
+        print_precision=".5f",
+        lambdas_pre=None,
+        log_loss=False,
+    ):
+        super().__init__(
+            pinn,
+            pde_loss,
+            extra_loss,
+            nodes_n,
+            node_names,
+            optimizer,
+            train_acc_metric,
+            alpha,
+            loss_penalty_power,
+            print_precision,
+            lambdas_pre,
+            log_loss,
+        )
+
+    @tf.function
+    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, pde_masks):
+        with tf.GradientTape(persistent=False) as tape:
+
+            if x_pde is None:
+                outputs, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_obs)
+            else:
+                outputs = self.pinn(x_obs)
+                _, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_pde)
+
+            if pde_masks is not None:
+                f_pde = f_pde
+
+            loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
+            loss_pde = tf.reduce_mean(tf.square(f_pde), axis=1)
+            loss_items = tf.concat([loss_obs, loss_pde], axis=0)
+
+            if self.log_loss:
+                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * tf.math.log(loss_items))
+            else:
+                loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
+
+            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            if self.extra_loss_len > 0:
+                loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
+                for extra_loss in self.extra_loss:
+                    trainables += extra_loss.trainables()
+                loss_value += tf.reduce_sum(loss_extra_items)
+            else:
+                loss_extra_items = []
+
+        if update_lambdas:
+            self._update_lambdas_(x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables)
+
+        grads = tape.gradient(loss_value, trainables)
+        self.optimizer.apply_gradients(zip(grads, trainables))
+        self.train_acc_metric.update_state(y_obs, outputs)
+        return loss_value, loss_obs, loss_pde, loss_extra_items
+
+    def _update_lambdas_(self, x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables):
+        if x_pde is None:
+            grads = [tf.gradients(loss_items[i], trainables) for i in range(loss_items.shape[0])]
+            reduced_grads = tf.stack(
+                [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads]
+            )
+        else:
+            grads_obs = [tf.gradients(loss_obs[i], self.pinn.trainable_variables) for i in range(loss_obs.shape[0])]
+            grads_pde = [tf.gradients(loss_pde[i], trainables) for i in range(loss_pde.shape[0])]
+            reduced_grads = tf.stack(
+                [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads_obs]
+                + [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads_pde]
+            )
+
+        if first_step:
+            for i in range(self.nodes_n * 2):
+                self.grad_norms[i].assign(reduced_grads[i])
+
+                self.loss_norms[i].assign(loss_items[i])
+
+        else:
+            for i in range(self.nodes_n * 2):
+                self.grad_norms[i].assign_add(reduced_grads[i])
+
+                self.loss_norms[i].assign_add(loss_items[i])
+
+        if last_step:
+            # Ws = tf.square(self.loss_norms) / tf.sqrt(self.grad_norms)
+            Ws = tf.pow(self.loss_norms, self.loss_penalty_power) / tf.sqrt(self.grad_norms)
+
+            w_total = tf.reduce_sum(Ws)
+            for i in range(self.nodes_n * 2):
+                self.lambdas[i].assign(
+                    self.alpha * self.lambdas[i] + (1 - self.alpha) * 2 * self.nodes_n * Ws[i] / w_total
+                )
+
+    def train(
+        self,
+        epochs,
+        batch_size,
+        X,
+        Y,
+        X_pde=None,
+        pde_masks=None,
+        print_interval=10,
+        stop_threshold=0,
+        shuffle=True,
+        sample_losses=True,
+        sample_parameters=True,
+        sample_regularisations=True,
+        sample_gradients=False,
+        regularise=True,
+        epoch_callback=None,
+    ):
+
+        # Samplling arrays
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
+        #
+        x1_size = len(X)
+        if X_pde is None:
+            #  There is no secondary dataset
+            x2_size = x1_size
+        else:
+            x2_size = len(X_pde)
+        # For first epoch, we store the number of steps to compelete a full epoch
+        last_step = -1
+        start_time = time.time()
+
+        for epoch in range(epochs):
+            if epoch % print_interval == 0:
+                print(f"\nStart of epoch {epoch:d}")
+
+            # Iterate over the batches of the dataset.
+            for step, (o_batch_indices, p_batch_indices) in enumerate(indices(batch_size, shuffle, x1_size, x2_size)):
+                x_batch_train, y_batch_train = X[o_batch_indices], Y[o_batch_indices]
+                if X_pde is None:
+                    p_batch_train = None
+                else:
+                    p_batch_train = X_pde[p_batch_indices]
+                loss_value_batch, loss_obs_batch, loss_pde_batch, loss_extra_batch = self.__train_step__(
+                    x_batch_train,
+                    y_batch_train,
+                    p_batch_train,
+                    regularise,
+                    step == 0,
+                    step == last_step,
+                    pde_masks,
+                )
+
+                if step > last_step:
+                    last_step = step
+                # add the batch loss: Note that the weights are calculated based on the batch size
+                #                     especifically, the last batch can have a different size
+                w_obs = len(o_batch_indices) / x1_size
+                w_pde = w_obs if p_batch_train is None else len(p_batch_indices) / x2_size
+
+                self.loss_reg_total += loss_value_batch.numpy()
+                self.loss_obs += loss_obs_batch.numpy() * w_obs
+                self.loss_pde += loss_pde_batch.numpy() * w_pde
+                total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
+                self.loss_extra += total_loss_extra_batch * w_obs
+                self.loss_total += (
+                    np.sum(loss_obs_batch.numpy() * w_obs)
+                    + np.sum(loss_pde_batch.numpy() * w_pde)
+                    + total_loss_extra_batch * w_obs
+                )
+            # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
+            self.train_acc = self.train_acc_metric.result()
+            if isinstance(self.train_acc_metric, keras.metrics.MeanSquaredError):
+                self.train_acc = np.sqrt(self.train_acc)
+            self.loss_total = np.sqrt(self.loss_total)
+            self.loss_obs = np.sqrt(self.loss_obs)
+            self.loss_pde = np.sqrt(self.loss_pde)
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
+            if epoch_callback is not None:
+                epoch_callback(epoch, samples)
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_()

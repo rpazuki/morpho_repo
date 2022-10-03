@@ -1,5 +1,6 @@
 import numpy as np
 import numba
+from numba import cuda, float32
 
 
 @numba.jit(nopython=True)

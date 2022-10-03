@@ -1,4 +1,4 @@
-from idna import valid_contexto
+# from idna import valid_contexto
 import numpy as np
 import numba
 
