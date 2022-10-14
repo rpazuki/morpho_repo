@@ -29,17 +29,17 @@ class TINN_masked(TINN):
     def __train_step__(self, x_obs, y_obs, x_pde, mask, update_lambdas, first_step, last_step):
         with tf.GradientTape(persistent=True) as tape:
             if x_pde is None:
-                outputs, f_u, f_v = self.pde_loss.loss(self.pinn, x_obs)
+                outputs, f_u, f_v = self.pde_residual.residual(self.pinn, x_obs)
             else:
                 outputs = self.pinn(x_obs)
-                _, f_u, f_v = self.pde_loss.loss(self.pinn, x_pde)
+                _, f_u, f_v = self.pde_residual.residual(self.pinn, x_pde)
             loss_obs_u = tf.reduce_mean(tf.square(y_obs[:, 0] - outputs[:, 0]))
             loss_obs_v = tf.reduce_mean(tf.square(y_obs[:, 1] - outputs[:, 1]))
             # Mask the PDE residuals
             pde_mask = tf.expand_dims(mask, 1)
             loss_pde_u = tf.reduce_mean(tf.square(f_u * pde_mask))
             loss_pde_v = tf.reduce_mean(tf.square(f_v * pde_mask))
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
                 loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
@@ -200,10 +200,10 @@ class TINN_multi_nodes_masked(TINN_multi_nodes):
     def __train_step__(self, x_obs, y_obs, x_pde, mask, update_lambdas, first_step, last_step):
         with tf.GradientTape(persistent=False) as tape:
             if x_pde is None:
-                outputs, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_obs)
+                outputs, f_pde = self.pde_residual.loss_multi_nodes(self.pinn, x_obs)
             else:
                 outputs = self.pinn(x_obs)
-                _, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_pde)
+                _, f_pde = self.pde_residual.loss_multi_nodes(self.pinn, x_pde)
 
             loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
             # Mask the PDE residuals
@@ -211,7 +211,7 @@ class TINN_multi_nodes_masked(TINN_multi_nodes):
             loss_pde = tf.reduce_mean(tf.square(f_pde * pde_mask), axis=1)
             loss_items = tf.concat([loss_obs, loss_pde], axis=0)
 
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
                 for extra_loss in self.extra_loss:
                     trainables += extra_loss.trainables()
@@ -349,16 +349,16 @@ class TINN_masked2(TINN):
             x_mask_expand = tf.expand_dims(x_mask, 1)
             x_obs_masked = tf.multiply(x_obs, x_mask_expand)
             if x_pde is None:
-                outputs, f_u, f_v = self.pde_loss.loss(self.pinn, x_obs_masked)
+                outputs, f_u, f_v = self.pde_residual.residual(self.pinn, x_obs_masked)
             else:
                 outputs = self.pinn(x_obs_masked)
                 x_pde_masked = tf.multiply(x_pde, tf.expand_dims(pde_mask, 1))
-                _, f_u, f_v = self.pde_loss.loss(self.pinn, x_pde_masked)
+                _, f_u, f_v = self.pde_residual.residual(self.pinn, x_pde_masked)
             loss_obs_u = tf.reduce_mean(tf.square(y_obs[:, 0] * x_mask - outputs[:, 0]))
             loss_obs_v = tf.reduce_mean(tf.square(y_obs[:, 1] * x_mask - outputs[:, 1]))
             loss_pde_u = tf.reduce_mean(tf.square(f_u))
             loss_pde_v = tf.reduce_mean(tf.square(f_v))
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
                 loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
@@ -522,17 +522,17 @@ class TINN_multi_nodes_masked2(TINN_multi_nodes):
             x_mask_expand = tf.expand_dims(x_mask, 1)
             x_obs_masked = tf.multiply(x_obs, x_mask_expand)
             if x_pde is None:
-                outputs, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_obs_masked)
+                outputs, f_pde = self.pde_residual.loss_multi_nodes(self.pinn, x_obs_masked)
             else:
                 outputs = self.pinn(x_obs_masked)
                 x_pde_masked = tf.multiply(x_pde, tf.expand_dims(pde_mask, 1))
-                _, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_pde_masked)
+                _, f_pde = self.pde_residual.loss_multi_nodes(self.pinn, x_pde_masked)
 
             loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs * x_mask_expand, outputs), axis=0)
             loss_pde = tf.reduce_mean(tf.square(f_pde), axis=0)
             loss_items = tf.concat([loss_obs, loss_pde], axis=0)
 
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
                 for extra_loss in self.extra_loss:
                     trainables += extra_loss.trainables()
@@ -689,10 +689,10 @@ class TINN_multi_nodes_masked3(TINN_multi_nodes):
         with tf.GradientTape(persistent=False) as tape:
 
             if x_pde is None:
-                outputs, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_obs)
+                outputs, f_pde = self.pde_residual.loss_multi_nodes(self.pinn, x_obs)
             else:
                 outputs = self.pinn(x_obs)
-                _, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_pde)
+                _, f_pde = self.pde_residual.loss_multi_nodes(self.pinn, x_pde)
 
             if pde_masks is not None:
                 f_pde = f_pde
@@ -706,7 +706,7 @@ class TINN_multi_nodes_masked3(TINN_multi_nodes):
             else:
                 loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
 
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
                 loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:

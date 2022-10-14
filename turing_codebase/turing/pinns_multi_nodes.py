@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 from .utils import indices
-from .pinns import NN, Loss
+from .pinns import NN, PDE_Residual, Loss
 
 
 class TINN_multi_nodes:
@@ -13,7 +13,8 @@ class TINN_multi_nodes:
     def __init__(
         self,
         pinn: NN,
-        pde_loss: Loss,
+        pde_residual: PDE_Residual,
+        loss: Loss,
         extra_loss=[],
         nodes_n=2,
         node_names=None,
@@ -26,9 +27,10 @@ class TINN_multi_nodes:
         log_loss=False,
     ):
         self.pinn = pinn
+        self.loss = loss
         self.extra_loss = extra_loss
         self.extra_loss_len = len(extra_loss)
-        self.pde_loss = pde_loss
+        self.pde_residual = pde_residual
         self.nodes_n = nodes_n
         self.log_loss = log_loss
         if node_names is None:
@@ -69,13 +71,15 @@ class TINN_multi_nodes:
         with tf.GradientTape(persistent=False) as tape:
 
             if x_pde is None:
-                outputs, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_obs)
+                outputs, f_pde = self.pde_residual.residual_multi_nodes(self.pinn, x_obs)
             else:
                 outputs = self.pinn(x_obs)
-                _, f_pde = self.pde_loss.loss_multi_nodes(self.pinn, x_pde)
+                _, f_pde = self.pde_residual.residual_multi_nodes(self.pinn, x_pde)
 
-            loss_obs = tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
-            loss_pde = tf.reduce_mean(tf.square(f_pde), axis=1)
+            loss_obs = self.loss.norm(
+                y_obs - outputs, axis=0
+            )  # tf.reduce_mean(tf.math.squared_difference(y_obs, outputs), axis=0)
+            loss_pde = self.loss.norm(f_pde, axis=1)  # tf.reduce_mean(tf.square(f_pde), axis=1)
             loss_items = tf.concat([loss_obs, loss_pde], axis=0)
 
             if self.log_loss:
@@ -83,9 +87,9 @@ class TINN_multi_nodes:
             else:
                 loss_value = tf.reduce_sum(tf.stack(self.lambdas) * loss_items)
 
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+            trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
-                loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
+                loss_extra_items = [extra_loss.residual(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
                     trainables += extra_loss.trainables()
                 loss_value += tf.reduce_sum(loss_extra_items)
@@ -264,7 +268,7 @@ class TINN_multi_nodes:
                 },
             }
         if sample_parameters:
-            for param in self.pde_loss.trainables():
+            for param in self.pde_residual.trainables():
                 ret[f"{param.name.split(':')[0]}"] = np.zeros(epochs)
         return ret
 
@@ -289,7 +293,7 @@ class TINN_multi_nodes:
             samples["grads_pde"][epoch, :] = [np.sqrt(item.numpy()) for item in self.grad_norms[self.nodes_n :]]
 
         if sample_parameters:
-            for param in self.pde_loss.trainables():
+            for param in self.pde_residual.trainables():
                 samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
     def _print_metrics_(self):
@@ -311,7 +315,7 @@ class TINN_multi_nodes:
                 f"lambda pde {name}: {last_lambda_pde[i]:{self.print_precision}}"
             )
 
-        print(self.pde_loss.trainables_str())
+        print(self.pde_residual.trainables_str())
         if self.extra_loss_len > 0:
             for i, loss in enumerate(self.extra_loss):
                 print(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")

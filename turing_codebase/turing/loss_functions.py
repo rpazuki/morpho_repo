@@ -1,12 +1,33 @@
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
+from . import PDE_Residual
 from . import Loss
 
 
-class Non_zero_params(Loss):
-    def __init__(self, loss_name, parameters, epsilon=1e-7, alpha=1, print_precision=".5f"):
-        super().__init__(name=f"non_zero_{loss_name}", print_precision=print_precision)
+class L2(Loss):
+    def __init__(self):
+        super().__init__(None)
+
+    def norm(self, x, axis=None):
+        return tf.reduce_mean(tf.square(x), axis=axis)
+
+
+class L_Inf(Loss):
+    def __init__(self):
+        super().__init__(None)
+
+    def norm(self, x, axis=None):
+        return tf.reduce_max(x, axis=axis)
+
+
+def clip_by_value(z):
+    return tf.clip_by_value(z, 1e-6, 1e10)
+
+
+class Non_zero_params(PDE_Residual):
+    def __init__(self, loss_name, parameters, epsilon=1e-7, alpha=1, print_precision=".5f", **kwargs):
+        super().__init__(name=f"non_zero_{loss_name}", print_precision=print_precision, **kwargs)
         """ Create a loss object that keeps the parameters from their lower bound.
 
             It use the function f(x) = epsilon/x^alpha to control the loss and its
@@ -29,7 +50,7 @@ class Non_zero_params(Loss):
         self.alpha = alpha
 
     @tf.function
-    def loss(self, pinn, x):
+    def residual(self, pinn, x):
         def f(x):
             # the small number epsilon*1e-3 prevents division by zero
             return self.epsilon / (x + self.epsilon * 1e-3) ** self.alpha
@@ -38,7 +59,7 @@ class Non_zero_params(Loss):
         return tf.reduce_sum(f(params))
 
 
-class ASDM(Loss):
+class ASDM(PDE_Residual):
     def __init__(
         self,
         dtype,
@@ -62,73 +83,58 @@ class ASDM(Loss):
         super().__init__(name="Loss_ASDM", print_precision=print_precision)
 
         self._trainables_ = ()
+
         if D_u is None:
-            self.D_u = tf.Variable(
-                [init_value], dtype=dtype, name="D_u", constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
-            )
+            self.D_u = tf.Variable([init_value], dtype=dtype, name="D_u", constraint=clip_by_value)
             self._trainables_ += (self.D_u,)
         else:
             self.D_u = tf.constant(D_u, dtype=dtype, name="D_u")
 
         if D_v is None:
-            self.D_v = tf.Variable(
-                [init_value], dtype=dtype, name="D_v", constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
-            )
+            self.D_v = tf.Variable([init_value], dtype=dtype, name="D_v", constraint=clip_by_value)
             self._trainables_ += (self.D_v,)
         else:
             self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
 
         if sigma_u is None:
-            self.sigma_u = tf.Variable(
-                [init_value], dtype=dtype, name="sigma_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.sigma_u = tf.Variable([init_value], dtype=dtype, name="sigma_u", constraint=clip_by_value)
             self._trainables_ += (self.sigma_u,)
         else:
             self.sigma_u = tf.constant(sigma_u, dtype=dtype, name="sigma_u")
 
         if sigma_v is None:
-            self.sigma_v = tf.Variable(
-                [init_value], dtype=dtype, name="sigma_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.sigma_v = tf.Variable([init_value], dtype=dtype, name="sigma_v", constraint=clip_by_value)
             self._trainables_ += (self.sigma_v,)
         else:
             self.sigma_v = tf.constant(sigma_v, dtype=dtype, name="sigma_v")
 
         if mu_u is None:
-            self.mu_u = tf.Variable(
-                [init_value], dtype=dtype, name="mu_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.mu_u = tf.Variable([init_value], dtype=dtype, name="mu_u", constraint=clip_by_value)
             self._trainables_ += (self.mu_u,)
         else:
             self.mu_u = tf.constant(mu_u, dtype=dtype, name="mu_u")
 
         if rho_u is None:
-            self.rho_u = tf.Variable(
-                [init_value], dtype=dtype, name="rho_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.rho_u = tf.Variable([init_value], dtype=dtype, name="rho_u", constraint=clip_by_value)
             self._trainables_ += (self.rho_u,)
         else:
             self.rho_u = tf.constant(rho_u, dtype=dtype, name="rho_u")
 
         if rho_v is None:
-            self.rho_v = tf.Variable(
-                [init_value], dtype=dtype, name="rho_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.rho_v = tf.Variable([init_value], dtype=dtype, name="rho_v", constraint=clip_by_value)
             self._trainables_ += (self.rho_v,)
         else:
             self.rho_v = tf.constant(rho_v, dtype=dtype, name="rho_v")
 
         if kappa_u is None:
-            self.kappa_u = tf.Variable(
-                [init_value], dtype=dtype, name="kappa_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.kappa_u = tf.Variable([init_value], dtype=dtype, name="kappa_u", constraint=clip_by_value)
             self._trainables_ += (self.kappa_u,)
         else:
             self.kappa_u = tf.constant(kappa_u, dtype=dtype, name="kappa_u")
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         p1, p2 = pinn.gradients(x, outputs)
 
         u = outputs[:, 0]
@@ -164,7 +170,7 @@ class ASDM(Loss):
         return outputs, f_u, f_v
 
 
-class Schnakenberg(Loss):
+class Schnakenberg(PDE_Residual):
     def __init__(
         self, dtype, init_value=10.0, D_u=None, D_v=None, c_0=None, c_1=None, c_2=None, c_3=None, print_precision=".5f"
     ):
@@ -172,56 +178,44 @@ class Schnakenberg(Loss):
 
         self._trainables_ = ()
         if D_u is None:
-            self.D_u = tf.Variable(
-                [init_value], dtype=dtype, name="D_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.D_u = tf.Variable([init_value], dtype=dtype, name="D_u", constraint=clip_by_value)
             self._trainables_ += (self.D_u,)
         else:
             self.D_u = tf.constant(D_u, dtype=dtype, name="D_u")
 
         if D_v is None:
-            self.D_v = tf.Variable(
-                [init_value], dtype=dtype, name="D_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.D_v = tf.Variable([init_value], dtype=dtype, name="D_v", constraint=clip_by_value)
             self._trainables_ += (self.D_v,)
         else:
             self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
 
         if c_0 is None:
-            self.c_0 = tf.Variable(
-                [init_value], dtype=dtype, name="c_0", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.c_0 = tf.Variable([init_value], dtype=dtype, name="c_0", constraint=clip_by_value)
             self._trainables_ += (self.c_0,)
         else:
             self.c_0 = tf.constant(c_0, dtype=dtype, name="c_0")
 
         if c_1 is None:
-            self.c_1 = tf.Variable(
-                [init_value], dtype=dtype, name="c_1", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.c_1 = tf.Variable([init_value], dtype=dtype, name="c_1", constraint=clip_by_value)
             self._trainables_ += (self.c_1,)
         else:
             self.c_1 = tf.constant(c_1, dtype=dtype, name="c_1")
 
         if c_2 is None:
-            self.c_2 = tf.Variable(
-                [init_value], dtype=dtype, name="c_2", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.c_2 = tf.Variable([init_value], dtype=dtype, name="c_2", constraint=clip_by_value)
             self._trainables_ += (self.c_2,)
         else:
             self.c_2 = tf.constant(c_2, dtype=dtype, name="c_2")
 
         if c_3 is None:
-            self.c_3 = tf.Variable(
-                [init_value], dtype=dtype, name="c_3", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.c_3 = tf.Variable([init_value], dtype=dtype, name="c_3", constraint=clip_by_value)
             self._trainables_ += (self.c_3,)
         else:
             self.c_3 = tf.constant(c_3, dtype=dtype, name="c_3")
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         p1, p2 = pinn.gradients(x, outputs)
 
         u = outputs[:, 0]
@@ -255,7 +249,7 @@ class Schnakenberg(Loss):
         return outputs, f_u, f_v
 
 
-class FitzHugh_Nagumo(Loss):
+class FitzHugh_Nagumo(PDE_Residual):
     def __init__(
         self,
         dtype,
@@ -272,54 +266,44 @@ class FitzHugh_Nagumo(Loss):
 
         self._trainables_ = ()
         if D_u is None:
-            self.D_u = tf.Variable(
-                [init_value], dtype=dtype, name="D_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.D_u = tf.Variable([init_value], dtype=dtype, name="D_u", constraint=clip_by_value)
             self._trainables_ += (self.D_u,)
         else:
             self.D_u = tf.constant(D_u, dtype=dtype, name="D_u")
 
         if D_v is None:
-            self.D_v = tf.Variable(
-                [init_value], dtype=dtype, name="D_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.D_v = tf.Variable([init_value], dtype=dtype, name="D_v", constraint=clip_by_value)
             self._trainables_ += (self.D_v,)
         else:
             self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
 
         if b is None:
-            self.b = tf.Variable([init_value], dtype=dtype, name="b", constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+            self.b = tf.Variable([init_value], dtype=dtype, name="b", constraint=clip_by_value)
             self._trainables_ += (self.b,)
         else:
             self.b = tf.constant(b, dtype=dtype, name="b")
 
         if gamma is None:
-            self.gamma = tf.Variable(
-                [init_value], dtype=dtype, name="gamma", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.gamma = tf.Variable([init_value], dtype=dtype, name="gamma", constraint=clip_by_value)
             self._trainables_ += (self.gamma,)
         else:
             self.gamma = tf.constant(gamma, dtype=dtype, name="gamma")
 
         if mu is None:
-            self.mu = tf.Variable(
-                [init_value], dtype=dtype, name="mu", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.mu = tf.Variable([init_value], dtype=dtype, name="mu", constraint=clip_by_value)
             self._trainables_ += (self.mu,)
         else:
             self.mu = tf.constant(mu, dtype=dtype, name="mu")
 
         if sigma is None:
-            self.sigma = tf.Variable(
-                [init_value], dtype=dtype, name="sigma", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.sigma = tf.Variable([init_value], dtype=dtype, name="sigma", constraint=clip_by_value)
             self._trainables_ += (self.sigma,)
         else:
             self.sigma = tf.constant(sigma, dtype=dtype, name="sigma")
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         p1, p2 = pinn.gradients(x, outputs)
 
         u = outputs[:, 0]
@@ -354,7 +338,7 @@ class FitzHugh_Nagumo(Loss):
 
 #   The following are wrapper classes to turn the usual losses
 #   to steady version (i.e. no time, or just one snapshot)
-class Brusselator(Loss):
+class Brusselator(PDE_Residual):
     def __init__(
         self,
         dtype,
@@ -369,35 +353,31 @@ class Brusselator(Loss):
 
         self._trainables_ = ()
         if D_u is None:
-            self.D_u = tf.Variable(
-                [init_value], dtype=dtype, name="D_u", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.D_u = tf.Variable([init_value], dtype=dtype, name="D_u", constraint=clip_by_value)
             self._trainables_ += (self.D_u,)
         else:
             self.D_u = tf.constant(D_u, dtype=dtype, name="D_u")
         if D_v is None:
-            self.D_v = tf.Variable(
-                [init_value], dtype=dtype, name="D_v", constraint=lambda z: tf.clip_by_value(z, 0, 1e10)
-            )
+            self.D_v = tf.Variable([init_value], dtype=dtype, name="D_v", constraint=clip_by_value)
             self._trainables_ += (self.D_v,)
         else:
             self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
 
         if A is None:
-            self.A = tf.Variable([init_value], dtype=dtype, name="A", constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+            self.A = tf.Variable([init_value], dtype=dtype, name="A", constraint=clip_by_value)
             self._trainables_ += (self.A,)
         else:
             self.A = tf.constant(A, dtype=dtype, name="A")
 
         if B is None:
-            self.B = tf.Variable([init_value], dtype=dtype, name="B", constraint=lambda z: tf.clip_by_value(z, 0, 1e10))
+            self.B = tf.Variable([init_value], dtype=dtype, name="B", constraint=clip_by_value)
             self._trainables_ += (self.B,)
         else:
             self.B = tf.constant(B, dtype=dtype, name="B")
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         p1, p2 = pinn.gradients(x, outputs)
 
         u = outputs[:, 0]
@@ -430,7 +410,7 @@ class Brusselator(Loss):
         return outputs, f_u, f_v
 
 
-class Circuit2_variant5716(Loss):
+class Circuit2_variant5716(PDE_Residual):
     def __init__(
         self,
         dtype,
@@ -490,13 +470,9 @@ class Circuit2_variant5716(Loss):
         def add_trainable(param, param_name, param_val=None):
             if param is None:
                 if param_val is None:
-                    v = tf.Variable(
-                        [init_value], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
-                    )
+                    v = tf.Variable([init_value], dtype=dtype, name=param_name, constraint=clip_by_value)
                 else:
-                    v = tf.Variable(
-                        [param_val], dtype=dtype, name=param_name, constraint=lambda z: tf.clip_by_value(z, 1e-6, 1e10)
-                    )
+                    v = tf.Variable([param_val], dtype=dtype, name=param_name, constraint=clip_by_value)
                 self._trainables_ += (v,)
                 setattr(self, param_name, v)
             else:
@@ -527,8 +503,8 @@ class Circuit2_variant5716(Loss):
         add_trainable(mulv_A, "mulv_A", mulv_A_val)
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         p1, p2 = pinn.gradients(x, outputs)
 
         A = outputs[:, 0]
@@ -613,8 +589,8 @@ class ASDM_steady(ASDM):
         super().__init__(dtype, init_value, D_a, D_s, sigma_a, sigma_s, mu_a, rho_a, rho_s, kappa_a, print_precision)
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         _, p2 = pinn.gradients(x, outputs)
 
         a = outputs[:, 0]
@@ -657,8 +633,8 @@ class Schnakenberg_steady(Schnakenberg):
         super().__init__(dtype, init_value, D_u, D_v, c_0, c_1, c_2, c_3, print_precision)
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         _, p2 = pinn.gradients(x, outputs)
 
         u = outputs[:, 0]
@@ -699,8 +675,8 @@ class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
         super().__init__(dtype, init_value, D_u, D_v, alpha, epsilon, mu, print_precision)
 
     @tf.function
-    def loss(self, pinn, x):
-        outputs = pinn(x)
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
         _, p2 = pinn.gradients(x, outputs)
 
         u = outputs[:, 0]

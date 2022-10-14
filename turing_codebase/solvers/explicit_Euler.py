@@ -9,9 +9,8 @@ def integrate(c0, t, dt, n, L, Ds, f, f_args):
     c_c = c0.copy()
     dc = np.zeros_like(c_c)
     d_ret = np.zeros((c0.shape[0], c0.shape[1], c0.shape[2], t.shape[0]))
-    d_ret[:, :, :, 0] = c_c.copy()
+    d_ret[:, :, :, 0] = c0.copy()
     c_num = c0.shape[0]
-    n_2 = (n[0] - 1) * (n[1] - 1)
     for t_i, t_next in enumerate(t[1:]):
         while t_c < t_next:
             f_f = f(c_c, t_c, f_args)

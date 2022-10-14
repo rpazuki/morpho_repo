@@ -1,9 +1,11 @@
 import time
 import copy
+import pathlib
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 from .utils import indices
+import pickle
 
 
 class NN(tf.Module):
@@ -44,7 +46,7 @@ class NN(tf.Module):
         )
 
     @tf.function
-    def __net__(self, inputs):
+    def net(self, inputs):
         # Map the inputs to the range [-1, 1]
         H = 2.0 * (inputs - self.lb) / (self.ub - self.lb) - 1.0
         for W, b in zip(self.Ws[:-1], self.bs[:-1]):
@@ -70,7 +72,7 @@ class NN(tf.Module):
                 arguemnt.
         """
         X = tf.cast(inputs, self.dtype)
-        return self.__net__(X)
+        return self.net(X)
 
     def gradients(self, inputs, outputs):
         """finds the first and second order griadients of outputs at inputs
@@ -120,21 +122,40 @@ class NN(tf.Module):
     def copy(self):
         return copy.deepcopy(self)
 
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # tf.saved_model.save(self, str(path))
+        #
+        # import os
+        # if not pathlib.Path(path.joinpath(name)).exists():
+        #   os.makedirs(path.joinpath(name))
+        with open(f"{str(path)}.pkl", "wb") as f:
+            pickle.dump(self, f)
 
-class Loss:
-    def __init__(self, name, print_precision=".5f"):
+    @classmethod
+    def restore(cls, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}.pkl", "rb") as f:
+            model = pickle.load(f)
+        return model
+
+
+class PDE_Residual(tf.Module):
+    def __init__(self, name, print_precision=".5f", **kwargs):
         """Loss value that is calulated for the output of the pinn
 
         Args:
             name: The name of the Loss
             print_precision: f string format
         """
-        self.name = name
+        # self.name = name
+        super().__init__(name=name, **kwargs)
         self.print_precision = print_precision
         self._trainables_ = ()
 
     # @tf.function
-    def loss(self, pinn, x):
+    def residual(self, pinn, x):
         """A tensorflow function that calculates and returns the loss
 
         Args:
@@ -147,13 +168,13 @@ class Loss:
         pass
 
     @tf.function
-    def loss_multi_nodes(self, pinn, x):
+    def residual_multi_nodes(self, pinn, x):
         """A tensorflow function that override the loss method
 
         Returns a concatenated tensor of derivatives, which
         TINN_multi_node expects.
         """
-        res = self.loss(pinn, x)
+        res = self.residual(pinn, x)
         outputs = res[0]
         #  return outputs, tf.concat([tf.expand_dims(f_u, axis=1) for f_u in res[1:]], axis=1)
         #  return outputs, tf.concat([f_u for f_u in res[1:]], axis=0)
@@ -195,27 +216,69 @@ class Loss:
     def parameter_names(self):
         return [f"{v.name.split(':')[0]}" for v in self.trainables()]
 
+    # def __getstate__(self):
 
-class TINN:
+    #    return
+
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        tf.saved_model.save(self, str(path))
+        #
+        # import os
+        # if not pathlib.Path(path.joinpath(name)).exists():
+        #   os.makedirs(path.joinpath(name))
+        with open(f"{str(path)}.pkl", "wb") as f:
+            pickle.dump(self, f)
+
+    # def __getstate__(self):
+    #    return
+
+    @classmethod
+    def restore(cls, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}.pkl", "rb") as f:
+            model = pickle.load(f)
+        return model
+
+
+class Loss:
+    def __init__(self, *childs):
+        self.childs = childs
+
+    def norm(self, x, axis=None):
+        if self.childs is None:
+            return 0
+        else:
+            ret = self.childs[0].norm(x)
+            for c in self.childs[1:]:
+                ret += self.childs[0].norm(x)
+        return ret
+
+    def __add__(self, left):
+        return Loss(self, left)
+
+
+class TINN(tf.Module):
     """Turing-Informed Neural Net"""
 
     def __init__(
         self,
         pinn: NN,
-        pde_loss: Loss,
+        pde_residual: PDE_Residual,
+        loss: Loss,
         extra_loss=[],
-        optimizer=keras.optimizers.Adam(),
-        train_acc_metric=keras.metrics.MeanSquaredError(),
         alpha=0.5,
         loss_penalty_power=2,
         print_precision=".5f",
+        **kwargs,
     ):
+        super().__init__(**kwargs)
         self.pinn = pinn
-        self.pde_loss = pde_loss
+        self.pde_residual = pde_residual
         self.extra_loss = extra_loss
         self.extra_loss_len = len(extra_loss)
-        self.optimizer = optimizer
-        self.train_acc_metric = train_acc_metric
+        self.loss = loss
         self.alpha = tf.Variable(alpha, dtype=pinn.dtype, trainable=False)
         self.loss_penalty_power = tf.Variable(loss_penalty_power, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
@@ -248,18 +311,22 @@ class TINN:
         self.train_acc = 0
 
     @tf.function
-    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step):
+    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, optimizer, train_acc_metric):
         with tf.GradientTape(persistent=True) as tape:
             if x_pde is None:
-                outputs, f_u, f_v = self.pde_loss.loss(self.pinn, x_obs)
+                outputs, f_u, f_v = self.pde_residual.residual(self.pinn, x_obs)
             else:
-                outputs = self.pinn(x_obs)
-                _, f_u, f_v = self.pde_loss.loss(self.pinn, x_pde)
-            loss_obs_u = tf.reduce_mean(tf.square(y_obs[:, 0] - outputs[:, 0]))
-            loss_obs_v = tf.reduce_mean(tf.square(y_obs[:, 1] - outputs[:, 1]))
-            loss_pde_u = tf.reduce_mean(tf.square(f_u))
-            loss_pde_v = tf.reduce_mean(tf.square(f_v))
-            trainables = self.pinn.trainable_variables + self.pde_loss.trainables()
+                outputs = self.pinn.net(x_obs)
+                _, f_u, f_v = self.pde_residual.residual(self.pinn, x_pde)
+            loss_obs_u = self.loss.norm(
+                y_obs[:, 0] - outputs[:, 0]
+            )  # tf.reduce_mean(tf.square(y_obs[:,0]-outputs[:,0]))
+            loss_obs_v = self.loss.norm(
+                y_obs[:, 1] - outputs[:, 1]
+            )  # tf.reduce_mean(tf.square(y_obs[:,1]-outputs[:,1]))
+            loss_pde_u = self.loss.norm(f_u)  # tf.reduce_mean(tf.square(f_u))
+            loss_pde_v = self.loss.norm(f_v)  # tf.reduce_mean(tf.square(f_v))
+            trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
                 loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
@@ -283,8 +350,8 @@ class TINN:
             )
 
         grads = tape.gradient(loss_value, trainables)
-        self.optimizer.apply_gradients(zip(grads, trainables))
-        self.train_acc_metric.update_state(y_obs, outputs)
+        optimizer.apply_gradients(zip(grads, trainables))
+        train_acc_metric.update_state(y_obs, outputs)
         return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, loss_extra_items
 
     def _update_lambdas_(
@@ -357,6 +424,8 @@ class TINN:
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
+        optimizer=keras.optimizers.Adam(),
+        train_acc_metric=keras.metrics.MeanSquaredError(),
     ):
 
         # Samplling arrays
@@ -394,7 +463,14 @@ class TINN:
                     loss_pde_v_batch,
                     loss_extra_batch,
                 ) = self.__train_step__(
-                    x_batch_train, y_batch_train, p_batch_train, regularise, step == 0, step == last_step
+                    x_batch_train,
+                    y_batch_train,
+                    p_batch_train,
+                    regularise,
+                    step == 0,
+                    step == last_step,
+                    optimizer,
+                    train_acc_metric,
                 )
 
                 if step > last_step:
@@ -419,7 +495,7 @@ class TINN:
                     + total_loss_extra_batch * w_obs
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
-            self.train_acc = self.train_acc_metric.result()
+            self.train_acc = train_acc_metric.result()
             # update the samples
             self._store_samples_(
                 samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
@@ -434,7 +510,7 @@ class TINN:
                 return samples
             # end for epoch in range(epochs)
             # Reset training metrics at the end of each epoch
-            self.train_acc_metric.reset_states()
+            train_acc_metric.reset_states()
             self._reset_losses_()
             if epoch % print_interval == 0:
                 print(f"Time taken: {(time.time() - start_time):.2f}s")
@@ -481,7 +557,7 @@ class TINN:
                 },
             }
         if sample_parameters:
-            for param in self.pde_loss.trainables():
+            for param in self.pde_residual.trainables():
                 ret[f"{param.name.split(':')[0]}"] = np.zeros(epochs)
         return ret
 
@@ -512,7 +588,7 @@ class TINN:
             samples["grads_pde_v"][epoch] = np.sqrt(self.grad_norm_pde_v.numpy())
 
         if sample_parameters:
-            for param in self.pde_loss.trainables():
+            for param in self.pde_residual.trainables():
                 samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
     def _print_metrics_(self):
@@ -537,7 +613,7 @@ class TINN:
             f"lambda pde u: {self.lambda_pde_u.numpy():{self.print_precision}}, "
             f"lambda pde v: {self.lambda_pde_v.numpy():{self.print_precision}}"
         )
-        print(self.pde_loss.trainables_str())
+        print(self.pde_residual.trainables_str())
         if self.extra_loss_len > 0:
             for i, loss in enumerate(self.extra_loss):
                 print(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")
@@ -549,11 +625,10 @@ class TINN_inverse:
     def __init__(
         self,
         pinn: NN,
-        pde_loss: Loss,
+        pde_residual: PDE_Residual,
+        loss: Loss,
         extra_loss=[],
         non_zero_loss=None,
-        optimizer=keras.optimizers.Adam(),
-        train_acc_metric=keras.metrics.MeanSquaredError(),
         alpha=0.5,
         obs_u_pre_reg=1.0,
         obs_v_pre_reg=1.0,
@@ -564,13 +639,12 @@ class TINN_inverse:
         print_precision=".5f",
     ):
         self.pinn = pinn
-        self.pde_loss = pde_loss
+        self.pde_residual = pde_residual
         self.non_zero_loss = non_zero_loss
-        self.pde_params_len = len(self.pde_loss.trainables())
+        self.pde_params_len = len(self.pde_residual.trainables())
         self.extra_loss = extra_loss
         self.extra_loss_len = len(extra_loss)
-        self.optimizer = optimizer
-        self.train_acc_metric = train_acc_metric
+        self.loss = loss
         self.alpha = alpha
         self.print_precision = print_precision
         #
@@ -615,17 +689,21 @@ class TINN_inverse:
         self.loss_pde_params = 0
 
     @tf.function
-    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step):
+    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, optimizer, train_acc_metric):
         with tf.GradientTape(persistent=True) as tape:
             if x_pde is None:
-                outputs, f_u, f_v = self.pde_loss.loss(self.pinn, x_obs)
+                outputs, f_u, f_v = self.pde_residual.residual(self.pinn, x_obs)
             else:
                 outputs = self.pinn(x_obs)
-                _, f_u, f_v = self.pde_loss.loss(self.pinn, x_pde)
-            loss_obs_u = tf.reduce_mean(tf.square(y_obs[:, 0] - outputs[:, 0]))
-            loss_obs_v = tf.reduce_mean(tf.square(y_obs[:, 1] - outputs[:, 1]))
-            loss_pde_u = tf.reduce_mean(tf.square(f_u))
-            loss_pde_v = tf.reduce_mean(tf.square(f_v))
+                _, f_u, f_v = self.pde_residual.residual(self.pinn, x_pde)
+            loss_obs_u = self.loss.norm(
+                y_obs[:, 0] - outputs[:, 0]
+            )  # tf.reduce_mean(tf.square(y_obs[:, 0] - outputs[:, 0]))
+            loss_obs_v = self.loss.norm(
+                y_obs[:, 1] - outputs[:, 1]
+            )  # tf.reduce_mean(tf.square(y_obs[:, 1] - outputs[:, 1]))
+            loss_pde_u = self.loss.norm(f_u)  # tf.reduce_mean(tf.square(f_u))
+            loss_pde_v = self.loss.norm(f_v)  # tf.reduce_mean(tf.square(f_v))
             trainables = self.pinn.trainable_variables  # + self.pde_loss.trainables()
             if self.extra_loss_len > 0:
                 loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
@@ -648,7 +726,7 @@ class TINN_inverse:
                 + self.lambda_pde_pre_params_v * self.lambda_pde_params_v * loss_pde_v
             )
             if self.non_zero_loss is not None:
-                non_zero_loss_value = self.non_zero_loss.loss(self.pinn, None)
+                non_zero_loss_value = self.non_zero_loss.residual(self.pinn, None)
             else:
                 non_zero_loss_value = 0
 
@@ -660,19 +738,19 @@ class TINN_inverse:
         # The pde coeffs are not included
         grads = tape.gradient(loss_reg, trainables)
         # loss_pde_params_reg is speratly regularised and updates the pde params
-        grads_params = tape.gradient(loss_pde_params_reg, self.pde_loss.trainables())
+        grads_params = tape.gradient(loss_pde_params_reg, self.pde_residual.trainables())
         #  None-zero parameter requlirisation
         if self.non_zero_loss is not None:
             grads_non_zero = tape.gradient(non_zero_loss_value, self.non_zero_loss.parameters)
 
-        self.optimizer.apply_gradients(zip(grads, trainables))
-        self.optimizer.apply_gradients(zip(grads_params, self.pde_loss.trainables()))
+        optimizer.apply_gradients(zip(grads, trainables))
+        optimizer.apply_gradients(zip(grads_params, self.pde_residual.trainables()))
         if self.non_zero_loss is not None:
-            self.optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
+            optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
 
         # grads = tape.gradient(loss_value, trainables)
         # self.optimizer.apply_gradients(zip(grads, trainables))
-        self.train_acc_metric.update_state(y_obs, outputs)
+        train_acc_metric.update_state(y_obs, outputs)
         return (
             loss_reg,
             loss_obs_u,
@@ -691,8 +769,8 @@ class TINN_inverse:
         grad_obs_v = tape.gradient(loss_obs_v, trainables)
         grad_pde_u = tape.gradient(loss_pde_u, trainables)
         grad_pde_v = tape.gradient(loss_pde_v, trainables)
-        grad_pde_params_u = tape.gradient(loss_pde_u, self.pde_loss.trainables())
-        grad_pde_params_v = tape.gradient(loss_pde_v, self.pde_loss.trainables())
+        grad_pde_params_u = tape.gradient(loss_pde_u, self.pde_residual.trainables())
+        grad_pde_params_v = tape.gradient(loss_pde_v, self.pde_residual.trainables())
 
         temp_1 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_obs_u])
         temp_2 = tf.reduce_mean([tf.reduce_mean(tf.square(item)) for item in grad_obs_v])
@@ -762,6 +840,8 @@ class TINN_inverse:
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
+        optimizer=keras.optimizers.Adam(),
+        train_acc_metric=keras.metrics.MeanSquaredError(),
     ):
 
         # Samplling arrays
@@ -801,7 +881,14 @@ class TINN_inverse:
                     loss_extra_batch,
                     loss_pde_params_reg_batch,
                 ) = self.__train_step__(
-                    x_batch_train, y_batch_train, p_batch_train, regularise, step == 0, step == last_step
+                    x_batch_train,
+                    y_batch_train,
+                    p_batch_train,
+                    regularise,
+                    step == 0,
+                    step == last_step,
+                    optimizer,
+                    train_acc_metric,
                 )
 
                 if step > last_step:
@@ -828,7 +915,7 @@ class TINN_inverse:
                     + total_loss_extra_batch * w_obs
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
-            self.train_acc = self.train_acc_metric.result()
+            self.train_acc = train_acc_metric.result()
             self.loss_non_zero = self.loss_non_zero / (last_step + 1)
             # update the samples
             self.__store_samples__(
@@ -844,7 +931,7 @@ class TINN_inverse:
                 return samples
             # end for epoch in range(epochs)
             # Reset training metrics at the end of each epoch
-            self.train_acc_metric.reset_states()
+            train_acc_metric.reset_states()
             self.__reset_losses__()
             if epoch % print_interval == 0:
                 print(f"Time taken: {(time.time() - start_time):.2f}s")
@@ -901,7 +988,7 @@ class TINN_inverse:
                 **{"loss_non_zero": np.zeros(epochs)},
             }
         if sample_parameters:
-            for param in self.pde_loss.trainables():
+            for param in self.pde_residual.trainables():
                 ret[f"{param.name.split(':')[0]}"] = np.zeros(epochs)
         return ret
 
@@ -939,7 +1026,7 @@ class TINN_inverse:
         if self.non_zero_loss is not None:
             samples["loss_non_zero"][epoch] = self.loss_non_zero
         if sample_parameters:
-            for param in self.pde_loss.trainables():
+            for param in self.pde_residual.trainables():
                 samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
     def __print_metrics__(self):
@@ -971,7 +1058,25 @@ class TINN_inverse:
             f"lambda pde params u: {self.lambda_pde_params_u.numpy():{self.print_precision}}, "
             f"lambda pde params v: {self.lambda_pde_params_v.numpy():{self.print_precision}}"
         )
-        print(self.pde_loss.trainables_str())
+        print(self.pde_residual.trainables_str())
         if self.extra_loss_len > 0:
             for i, loss in enumerate(self.extra_loss):
                 print(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")
+
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # tf.saved_model.save(self, str(path))
+        #
+        # import os
+        # if not pathlib.Path(path.joinpath(name)).exists():
+        #   os.makedirs(path.joinpath(name))
+        with open(f"{str(path)}.pkl", "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def restore(cls, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}.pkl", "rb") as f:
+            model = pickle.load(f)
+        return model
