@@ -4,7 +4,7 @@ import pathlib
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-from .utils import indices
+from .utils import indices, TINN_Dataset
 import pickle
 
 
@@ -268,6 +268,7 @@ class TINN(tf.Module):
         pde_residual: PDE_Residual,
         loss: Loss,
         extra_loss=[],
+        non_zero_loss=None,
         alpha=0.5,
         loss_penalty_power=2,
         print_precision=".5f",
@@ -276,6 +277,7 @@ class TINN(tf.Module):
         super().__init__(**kwargs)
         self.pinn = pinn
         self.pde_residual = pde_residual
+        self.non_zero_loss = non_zero_loss
         self.extra_loss = extra_loss
         self.extra_loss_len = len(extra_loss)
         self.loss = loss
@@ -309,6 +311,7 @@ class TINN(tf.Module):
         self.loss_pde_v = 0
         self.loss_extra = np.zeros(self.extra_loss_len)
         self.train_acc = 0
+        self.loss_non_zero = 0
 
     @tf.function
     def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, optimizer, train_acc_metric):
@@ -328,7 +331,7 @@ class TINN(tf.Module):
             loss_pde_v = self.loss.norm(f_v)  # tf.reduce_mean(tf.square(f_v))
             trainables = self.pinn.trainable_variables + self.pde_residual.trainables()
             if self.extra_loss_len > 0:
-                loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
+                loss_extra_items = [extra_loss.residual(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
                     trainables += extra_loss.trainables()
                 loss_extra = tf.reduce_sum(loss_extra_items)
@@ -344,15 +347,27 @@ class TINN(tf.Module):
                 + loss_extra
             )
 
+            if self.non_zero_loss is not None:
+                non_zero_loss_value = self.non_zero_loss.residual(self.pinn, None)
+            else:
+                non_zero_loss_value = 0
+
         if update_lambdas:
             self._update_lambdas_(
                 x_pde, first_step, last_step, tape, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, trainables
             )
 
         grads = tape.gradient(loss_value, trainables)
+        #  None-zero parameter requlirisation
+        if self.non_zero_loss is not None:
+            grads_non_zero = tape.gradient(non_zero_loss_value, self.non_zero_loss.parameters)
+        #
         optimizer.apply_gradients(zip(grads, trainables))
+        if self.non_zero_loss is not None:
+            optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
+
         train_acc_metric.update_state(y_obs, outputs)
-        return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, loss_extra_items
+        return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, non_zero_loss_value, loss_extra_items
 
     def _update_lambdas_(
         self, x_pde, first_step, last_step, tape, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, trainables
@@ -413,6 +428,121 @@ class TINN(tf.Module):
         self,
         epochs,
         batch_size,
+        dataset: TINN_Dataset,
+        print_interval=10,
+        stop_threshold=0,
+        sample_losses=True,
+        sample_parameters=True,
+        sample_regularisations=True,
+        sample_gradients=False,
+        regularise=True,
+        optimizer=keras.optimizers.Adam(),
+        train_acc_metric=keras.metrics.MeanSquaredError(),
+    ):
+
+        # Samplling arrays
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
+        #
+        # For first epoch, we store the number of steps to compelete a full epoch
+        last_step = -1
+        start_time = time.time()
+        # indeces_list = list(indices(batch_size, shuffle, x1_size, x2_size))
+        x_size = dataset.x_size
+        x_pde_size = dataset.x_pde_size
+        dataset = dataset.cache()
+        dataset = dataset.batch(batch_size)
+        # if X_pde is None:
+        # X_pde_i = X_pde[indeces_list]
+        # dataset2 = tf.data.Dataset.from_tensor_slices(X_pde_i)
+
+        for epoch in range(epochs):
+            if epoch % print_interval == 0:
+                print(f"\nStart of epoch {epoch:d}")
+
+            step = 0
+            # Iterate over the batches of the dataset.
+            for element in dataset:
+                if len(element) == 2:
+                    x_batch_train, y_batch_train = element
+                    p_batch_train = None
+                else:
+                    x_batch_train, y_batch_train, p_batch_train = element
+
+                (
+                    loss_value_batch,
+                    loss_obs_u_batch,
+                    loss_obs_v_batch,
+                    loss_pde_u_batch,
+                    loss_pde_v_batch,
+                    loss_non_zero_batch,
+                    loss_extra_batch,
+                ) = self.__train_step__(
+                    x_batch_train,
+                    y_batch_train,
+                    p_batch_train,
+                    regularise,
+                    step == 0,
+                    step == last_step,
+                    optimizer,
+                    train_acc_metric,
+                )
+
+                if step > last_step:
+                    last_step = step
+                # add the batch loss: Note that the weights are calculated based on the batch size
+                #                     especifically, the last batch can have a different size
+                # w_obs = len(o_batch_indices) / x1_size
+                w_obs = batch_size / x_size
+                # w_pde = w_obs if p_batch_train is None else len(p_batch_indices) / x2_size
+                w_pde = w_obs / x_pde_size  # if p_batch_train is None else batch_size / x2_size
+
+                self.loss_reg_total += loss_value_batch
+                self.loss_obs_u += loss_obs_u_batch * w_obs
+                self.loss_obs_v += loss_obs_v_batch * w_obs
+                self.loss_pde_u += loss_pde_u_batch * w_pde
+                self.loss_pde_v += loss_pde_v_batch * w_pde
+                total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
+                self.loss_non_zero += loss_non_zero_batch
+                self.loss_extra += total_loss_extra_batch * w_obs
+                self.loss_total += (
+                    loss_obs_u_batch * w_obs
+                    + loss_obs_v_batch * w_obs
+                    + loss_pde_u_batch * w_pde
+                    + loss_pde_v_batch * w_pde
+                    + total_loss_extra_batch * w_obs
+                )
+                step += 1
+            # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
+            self.train_acc = train_acc_metric.result()
+            self.loss_non_zero = self.loss_non_zero / (last_step + 1)
+            # update the samples
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
+            # Display metrics at the end of each epoch.
+            if epoch % print_interval == 0:
+                self._print_metrics_()
+            if stop_threshold >= float(self.train_acc):
+                print("############################################")
+                print("#               Early stop                 #")
+                print("############################################")
+                return samples
+            # end for epoch in range(epochs)
+            # Reset training metrics at the end of each epoch
+            train_acc_metric.reset_states()
+            self._reset_losses_()
+            if epoch % print_interval == 0:
+                print(f"Time taken: {(time.time() - start_time):.2f}s")
+                start_time = time.time()
+
+        return samples
+
+    def train2(
+        self,
+        epochs,
+        batch_size,
         X,
         Y,
         X_pde=None,
@@ -461,6 +591,7 @@ class TINN(tf.Module):
                     loss_obs_v_batch,
                     loss_pde_u_batch,
                     loss_pde_v_batch,
+                    loss_non_zero_batch,
                     loss_extra_batch,
                 ) = self.__train_step__(
                     x_batch_train,
@@ -486,6 +617,7 @@ class TINN(tf.Module):
                 self.loss_pde_u += loss_pde_u_batch * w_pde
                 self.loss_pde_v += loss_pde_v_batch * w_pde
                 total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
+                self.loss_non_zero += loss_non_zero_batch
                 self.loss_extra += total_loss_extra_batch * w_obs
                 self.loss_total += (
                     loss_obs_u_batch * w_obs
@@ -496,6 +628,7 @@ class TINN(tf.Module):
                 )
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
             self.train_acc = train_acc_metric.result()
+            self.loss_non_zero = self.loss_non_zero / (last_step + 1)
             # update the samples
             self._store_samples_(
                 samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
@@ -556,6 +689,11 @@ class TINN(tf.Module):
                     "grads_pde_v": np.zeros(epochs),
                 },
             }
+        if self.non_zero_loss is not None:
+            ret = {
+                **ret,
+                **{"loss_non_zero": np.zeros(epochs)},
+            }
         if sample_parameters:
             for param in self.pde_residual.trainables():
                 ret[f"{param.name.split(':')[0]}"] = np.zeros(epochs)
@@ -586,7 +724,8 @@ class TINN(tf.Module):
             samples["grads_obs_v"][epoch] = np.sqrt(self.grad_norm_obs_v.numpy())
             samples["grads_pde_u"][epoch] = np.sqrt(self.grad_norm_pde_u.numpy())
             samples["grads_pde_v"][epoch] = np.sqrt(self.grad_norm_pde_v.numpy())
-
+        if self.non_zero_loss is not None:
+            samples["loss_non_zero"][epoch] = self.loss_non_zero
         if sample_parameters:
             for param in self.pde_residual.trainables():
                 samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
@@ -605,6 +744,8 @@ class TINN(tf.Module):
             f"pde u loss: {self.loss_pde_u:{self.print_precision}}, "
             f"pde v loss: {self.loss_pde_v:{self.print_precision}}"
         )
+        if self.non_zero_loss is not None:
+            print(f"Non-zero loss: {self.loss_non_zero:{self.print_precision}}, ")
         print(
             f"lambda obs u: {self.lambda_obs_u.numpy():{self.print_precision}}, "
             f"lambda obs v: {self.lambda_obs_v.numpy():{self.print_precision}}"
@@ -618,8 +759,26 @@ class TINN(tf.Module):
             for i, loss in enumerate(self.extra_loss):
                 print(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")
 
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # tf.saved_model.save(self, str(path))
+        #
+        # import os
+        # if not pathlib.Path(path.joinpath(name)).exists():
+        #   os.makedirs(path.joinpath(name))
+        with open(f"{str(path)}.pkl", "wb") as f:
+            pickle.dump(self, f)
 
-class TINN_inverse:
+    @classmethod
+    def restore(cls, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}.pkl", "rb") as f:
+            model = pickle.load(f)
+        return model
+
+
+class TINN_inverse(tf.Module):
     """Turing-Informed Neural Net"""
 
     def __init__(
@@ -630,6 +789,7 @@ class TINN_inverse:
         extra_loss=[],
         non_zero_loss=None,
         alpha=0.5,
+        loss_penalty_power=2,
         obs_u_pre_reg=1.0,
         obs_v_pre_reg=1.0,
         pde_u_pre_reg=1.0,
@@ -646,6 +806,7 @@ class TINN_inverse:
         self.extra_loss_len = len(extra_loss)
         self.loss = loss
         self.alpha = alpha
+        self.loss_penalty_power = tf.Variable(loss_penalty_power, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
         #
         self.lambda_obs_u = tf.Variable(1.0, dtype=pinn.dtype, trainable=False)
@@ -706,7 +867,7 @@ class TINN_inverse:
             loss_pde_v = self.loss.norm(f_v)  # tf.reduce_mean(tf.square(f_v))
             trainables = self.pinn.trainable_variables  # + self.pde_loss.trainables()
             if self.extra_loss_len > 0:
-                loss_extra_items = [extra_loss.loss(self.pinn, x_obs) for extra_loss in self.extra_loss]
+                loss_extra_items = [extra_loss.residual(self.pinn, x_obs) for extra_loss in self.extra_loss]
                 for extra_loss in self.extra_loss:
                     trainables += extra_loss.trainables()
                 loss_extra = tf.reduce_sum(loss_extra_items)
@@ -806,12 +967,18 @@ class TINN_inverse:
             self.loss_norm_pde_v.assign(self.loss_norm_pde_v + loss_pde_v)
 
         if last_step:
-            w_1 = self.loss_norm_obs_u**2 / tf.sqrt(self.grad_norm_obs_u)
-            w_2 = self.loss_norm_obs_v**2 / tf.sqrt(self.grad_norm_obs_v)
-            w_3 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_u)
-            w_4 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_v)
-            w_5 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_params_u)
-            w_6 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_params_v)
+            # w_1 = self.loss_norm_obs_u**2 / tf.sqrt(self.grad_norm_obs_u)
+            # w_2 = self.loss_norm_obs_v**2 / tf.sqrt(self.grad_norm_obs_v)
+            # w_3 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_u)
+            # w_4 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_v)
+            # w_5 = self.loss_norm_pde_u**2 / tf.sqrt(self.grad_norm_pde_params_u)
+            # w_6 = self.loss_norm_pde_v**2 / tf.sqrt(self.grad_norm_pde_params_v)
+            w_1 = tf.pow(self.loss_norm_obs_u, self.loss_penalty_power) / tf.sqrt(self.grad_norm_obs_u)
+            w_2 = tf.pow(self.loss_norm_obs_v, self.loss_penalty_power) / tf.sqrt(self.grad_norm_obs_v)
+            w_3 = tf.pow(self.loss_norm_pde_u, self.loss_penalty_power) / tf.sqrt(self.grad_norm_pde_u)
+            w_4 = tf.pow(self.loss_norm_pde_v, self.loss_penalty_power) / tf.sqrt(self.grad_norm_pde_v)
+            w_5 = tf.pow(self.loss_norm_pde_u, self.loss_penalty_power) / tf.sqrt(self.grad_norm_pde_params_u)
+            w_6 = tf.pow(self.loss_norm_pde_v, self.loss_penalty_power) / tf.sqrt(self.grad_norm_pde_params_v)
 
             w_total = w_1 + w_2 + w_3 + w_4 + w_5 + w_6
             self.lambda_obs_u.assign(self.alpha * self.lambda_obs_u + ((1 - self.alpha) * 6.0 * w_1) / w_total)

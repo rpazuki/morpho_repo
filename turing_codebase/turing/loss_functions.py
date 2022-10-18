@@ -1,8 +1,48 @@
+from enum import Enum
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 from . import PDE_Residual
 from . import Loss
+
+
+class Parameter_Type(Enum):
+    CONSTANT = 1
+    VARIABLE = 2
+    INPUT = 3
+
+
+def clip_by_value(z):
+    return tf.clip_by_value(z, 1e-6, 1e10)
+
+
+class PDE_Parameter:
+    def __init__(self, name, parameter_type: Parameter_Type, value=1.0, index=-1, dtype=tf.float32):
+        self.name = name
+        self.parameter_type = parameter_type
+        self.dtype = dtype
+        self.value = value
+        self.index = index
+        self.trainable = ()
+
+    def build(self):
+        if self.parameter_type == Parameter_Type.CONSTANT:
+            self.tf_var = tf.constant(self.value, dtype=self.dtype, name=self.name)
+        elif self.parameter_type == Parameter_Type.VARIABLE:
+            self.tf_var = tf.Variable([self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value)
+            self.trainable = (self.tf_var,)
+        else:  # INPUT
+            self.tf_var = None
+
+        return self
+
+    def get_value(self, input):
+        if self.parameter_type == Parameter_Type.CONSTANT:
+            return self.tf_var
+        elif self.parameter_type == Parameter_Type.VARIABLE:
+            return self.tf_var
+        else:  # INPUT, self.index + 3 starts after (x, y, t)
+            return input[:, self.index + 3]
 
 
 class L2(Loss):
@@ -18,11 +58,7 @@ class L_Inf(Loss):
         super().__init__(None)
 
     def norm(self, x, axis=None):
-        return tf.reduce_max(x, axis=axis)
-
-
-def clip_by_value(z):
-    return tf.clip_by_value(z, 1e-6, 1e10)
+        return tf.reduce_max(tf.abs(x), axis=axis)
 
 
 class Non_zero_params(PDE_Residual):
@@ -341,39 +377,24 @@ class FitzHugh_Nagumo(PDE_Residual):
 class Brusselator(PDE_Residual):
     def __init__(
         self,
-        dtype,
-        init_value=10.0,
-        D_u=None,
-        D_v=None,
-        A=None,
-        B=None,
+        D_u: PDE_Parameter,
+        D_v: PDE_Parameter,
+        A: PDE_Parameter,
+        B: PDE_Parameter,
         print_precision=".5f",
     ):
         super().__init__(name="Brusselator", print_precision=print_precision)
 
         self._trainables_ = ()
-        if D_u is None:
-            self.D_u = tf.Variable([init_value], dtype=dtype, name="D_u", constraint=clip_by_value)
-            self._trainables_ += (self.D_u,)
-        else:
-            self.D_u = tf.constant(D_u, dtype=dtype, name="D_u")
-        if D_v is None:
-            self.D_v = tf.Variable([init_value], dtype=dtype, name="D_v", constraint=clip_by_value)
-            self._trainables_ += (self.D_v,)
-        else:
-            self.D_v = tf.constant(D_v, dtype=dtype, name="D_v")
-
-        if A is None:
-            self.A = tf.Variable([init_value], dtype=dtype, name="A", constraint=clip_by_value)
-            self._trainables_ += (self.A,)
-        else:
-            self.A = tf.constant(A, dtype=dtype, name="A")
-
-        if B is None:
-            self.B = tf.Variable([init_value], dtype=dtype, name="B", constraint=clip_by_value)
-            self._trainables_ += (self.B,)
-        else:
-            self.B = tf.constant(B, dtype=dtype, name="B")
+        #
+        self.D_u = D_u.build()
+        self._trainables_ += D_u.trainable
+        self.D_v = D_v.build()
+        self._trainables_ += D_v.trainable
+        self.A = A.build()
+        self._trainables_ += A.trainable
+        self.B = B.build()
+        self._trainables_ += B.trainable
 
     @tf.function
     def residual(self, pinn, x):
@@ -397,10 +418,10 @@ class Brusselator(PDE_Residual):
         v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
         v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
 
-        D_u = self.D_u
-        D_v = self.D_v
-        A = self.A
-        B = self.B
+        D_u = self.D_u.get_value(x)
+        D_v = self.D_v.get_value(x)
+        A = self.A.get_value(x)
+        B = self.B.get_value(x)
 
         u2v = u * u * v
 

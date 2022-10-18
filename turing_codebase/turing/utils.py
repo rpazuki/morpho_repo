@@ -1,4 +1,85 @@
+import os
+import pathlib
+from collections import namedtuple
 import numpy as np
+import tensorflow as tf
+
+Simulation = namedtuple(
+    "Simulation",
+    [
+        "name",
+        "n",
+        "L",
+        "Ds",
+        "dt",
+        "t_start",
+        "t_end",
+        "t_steps",
+        "parameters",
+        "steady_state_func",
+        "perturbation_size",
+        "kinetic_func",
+        "tol",
+        "sample_parameters",
+        "sample_parameters_num",
+        "sample_parameters_std",
+    ],
+)
+
+
+class TINN_Dataset(tf.data.Dataset):
+    # def
+    def __new__(cls, X, Y, X_PDE=None, shuffle=True):
+
+        ds = tf.data.Dataset.from_tensor_slices((X, Y) if X_PDE is None else (X, Y, X_PDE))
+        if shuffle:
+            ds = ds.shuffle(len(X), reshuffle_each_iteration=True)
+
+        setattr(ds, "x_size", len(X))
+        setattr(ds, "x_pde_size", ds.x_size if X_PDE is None else len(X_PDE))
+        # setattr(ds, "X", X)
+        return ds
+
+
+class TINN_Single_Sim_Dataset(TINN_Dataset):
+    def __new__(cls, path, name, thining_start=0, thining_step=0, pde_ratio=0, shuffle=True):
+        data_path = pathlib.PurePath(path)
+        with open(data_path.joinpath(f"{name}.npy"), "rb") as f:
+            data = np.load(f)
+        with open(data_path.joinpath("simulation.txt"), "r") as f:
+            simulation = eval(f.read())
+        t_star = np.linspace(simulation.t_start, simulation.t_end, simulation.t_steps)
+        # Thining the dataset
+        t_star = t_star[thining_start:]
+        data = data[..., thining_start:]
+        if thining_step > 0:
+            t_star = t_star[::thining_step]
+            data = data[..., ::thining_step]
+
+        T = t_star.shape[0]
+
+        L = simulation.L[0]
+        x_size = simulation.n[0]  #
+        y_size = simulation.n[1]  #
+        N = x_size * y_size
+
+        model_params = {"training_data_size": T * N}
+        if pde_ratio > 0:
+            model_params = {**model_params, **{"pde_data_size": (T * N) / pde_ratio}}
+
+        dataset = create_dataset(data, t_star, N, T, L, **model_params)
+        obs_X = dataset["obs_input"]
+        obs_Y = dataset["obs_output"]
+        if pde_ratio > 0:
+            pde_X = dataset["pde"]
+        else:
+            pde_X = None
+        ds = super().__new__(cls, obs_X, obs_Y, pde_X, shuffle)
+        setattr(ds, "lb", dataset["lb"])
+        setattr(ds, "ub", dataset["ub"])
+        setattr(ds, "simulation", simulation)
+        setattr(ds, "ts", t_star)
+        return ds
 
 
 def lower_upper_bounds(inputs_of_inputs):
@@ -65,9 +146,8 @@ def create_dataset(
     T,
     L,
     training_data_size,
-    pde_data_size,
-    boundary_data_size,
-    with_boundary=True,
+    pde_data_size=None,
+    boundary_data_size=None,
     signal_to_noise=0,
     shuffle=True,
 ):
@@ -90,19 +170,19 @@ def create_dataset(
 
     # a = AA[:, np.newaxis]  # NT x 1
     # s = SS[:, np.newaxis]  # NT x 1
+    if boundary_data_size is not None:
+        boundary_x_LB = np.concatenate((x_domain, np.repeat(x_domain[0], y_size)))
+        boundary_x_RT = np.concatenate((x_domain, np.repeat(x_domain[-1], y_size)))
 
-    boundary_x_LB = np.concatenate((x_domain, np.repeat(x_domain[0], y_size)))
-    boundary_x_RT = np.concatenate((x_domain, np.repeat(x_domain[-1], y_size)))
+        boundary_y_LB = np.concatenate((np.repeat(y_domain[0], x_size), y_domain))
+        boundary_y_RT = np.concatenate((np.repeat(y_domain[-1], x_size), y_domain))
 
-    boundary_y_LB = np.concatenate((np.repeat(y_domain[0], x_size), y_domain))
-    boundary_y_RT = np.concatenate((np.repeat(y_domain[-1], x_size), y_domain))
-
-    boundary_XX_LB = np.tile(boundary_x_LB.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    boundary_XX_RT = np.tile(boundary_x_RT.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    boundary_YY_LB = np.tile(boundary_y_LB.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    boundary_YY_RT = np.tile(boundary_y_RT.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
-    # T x (x_size + y_size), 1
-    boundary_TT = np.repeat(t_star[-T:], (x_size + y_size))[:, np.newaxis]
+        boundary_XX_LB = np.tile(boundary_x_LB.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
+        boundary_XX_RT = np.tile(boundary_x_RT.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
+        boundary_YY_LB = np.tile(boundary_y_LB.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
+        boundary_YY_RT = np.tile(boundary_y_RT.flatten(), T)[:, np.newaxis]  # (x_size + y_size) x T, 1
+        # T x (x_size + y_size), 1
+        boundary_TT = np.repeat(t_star[-T:], (x_size + y_size))[:, np.newaxis]
     ##########################################
     # Including noise
     if signal_to_noise > 0:
@@ -116,15 +196,17 @@ def create_dataset(
     else:
         idx_data = list(range(training_data_size))
     # PDE colocations
-    if shuffle:
-        idx_pde = np.random.choice(N * T, pde_data_size, replace=False)
-    else:
-        idx_pde = list(range(pde_data_size))
+    if pde_data_size is not None:
+        if shuffle:
+            idx_pde = np.random.choice(N * T, pde_data_size, replace=False)
+        else:
+            idx_pde = list(range(pde_data_size))
     # Periodic boundary condition
-    if shuffle:
-        idx_boundary = np.random.choice((x_size + y_size) * T, boundary_data_size, replace=False)
-    else:
-        idx_boundary = list(range(boundary_data_size))
+    if boundary_data_size is not None:
+        if shuffle:
+            idx_boundary = np.random.choice((x_size + y_size) * T, boundary_data_size, replace=False)
+        else:
+            idx_boundary = list(range(boundary_data_size))
 
     # Lower/Upper bounds
     lb, ub = lower_upper_bounds([np.c_[XX, YY, TT]])
@@ -132,15 +214,16 @@ def create_dataset(
     ret = {
         "obs_input": np.c_[XX[idx_data], YY[idx_data], TT[idx_data]],
         "obs_output": np.c_[AA[idx_data], SS[idx_data]],
-        "pde": np.c_[XX[idx_pde], YY[idx_pde], TT[idx_pde]],
         "lb": lb,
         "ub": ub,
     }
+    if pde_data_size is not None:
+        ret = {**ret, **{"pde": np.c_[XX[idx_pde], YY[idx_pde], TT[idx_pde]]}}
     if signal_to_noise > 0:
         ret["obs_output"][:, 0] += sigma_a * np.random.randn(len(idx_data))
         ret["obs_output"][:, 1] += sigma_s * np.random.randn(len(idx_data))
 
-    if with_boundary:
+    if boundary_data_size is not None:
         ret = {
             **ret,
             **{
