@@ -1,3 +1,4 @@
+from email.errors import FirstHeaderLineIsContinuationDefect
 import time
 import copy
 import pathlib
@@ -269,6 +270,7 @@ class TINN(tf.Module):
         loss: Loss,
         extra_loss=[],
         non_zero_loss=None,
+        optimizer=keras.optimizers.Adam(learning_rate=5e-4),
         alpha=0.5,
         loss_penalty_power=2,
         print_precision=".5f",
@@ -281,9 +283,11 @@ class TINN(tf.Module):
         self.extra_loss = extra_loss
         self.extra_loss_len = len(extra_loss)
         self.loss = loss
+        self.optimizer = optimizer
         self.alpha = tf.Variable(alpha, dtype=pinn.dtype, trainable=False)
         self.loss_penalty_power = tf.Variable(loss_penalty_power, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
+        self.weight_values = None
         #
         self.lambda_obs_u = tf.Variable(1.0, dtype=pinn.dtype, trainable=False)
         self.lambda_obs_v = tf.Variable(1.0, dtype=pinn.dtype, trainable=False)
@@ -314,7 +318,7 @@ class TINN(tf.Module):
         self.loss_non_zero = 0
 
     @tf.function
-    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, optimizer, train_acc_metric):
+    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, train_acc_metric):
         with tf.GradientTape(persistent=True) as tape:
             if x_pde is None:
                 outputs, f_u, f_v = self.pde_residual.residual(self.pinn, x_obs)
@@ -350,7 +354,7 @@ class TINN(tf.Module):
             if self.non_zero_loss is not None:
                 non_zero_loss_value = self.non_zero_loss.residual(self.pinn, None)
             else:
-                non_zero_loss_value = 0
+                non_zero_loss_value = 0.0
 
         if update_lambdas:
             self._update_lambdas_(
@@ -362,9 +366,9 @@ class TINN(tf.Module):
         if self.non_zero_loss is not None:
             grads_non_zero = tape.gradient(non_zero_loss_value, self.non_zero_loss.parameters)
         #
-        optimizer.apply_gradients(zip(grads, trainables))
+        self.optimizer.apply_gradients(zip(grads, trainables))
         if self.non_zero_loss is not None:
-            optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
+            self.optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
 
         train_acc_metric.update_state(y_obs, outputs)
         return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, non_zero_loss_value, loss_extra_items
@@ -436,7 +440,7 @@ class TINN(tf.Module):
         sample_regularisations=True,
         sample_gradients=False,
         regularise=True,
-        optimizer=keras.optimizers.Adam(),
+        regularise_interval=1,
         train_acc_metric=keras.metrics.MeanSquaredError(),
     ):
 
@@ -451,11 +455,14 @@ class TINN(tf.Module):
         # indeces_list = list(indices(batch_size, shuffle, x1_size, x2_size))
         x_size = dataset.x_size
         x_pde_size = dataset.x_pde_size
-        dataset = dataset.cache()
+        #
         dataset = dataset.batch(batch_size)
         # if X_pde is None:
         # X_pde_i = X_pde[indeces_list]
         # dataset2 = tf.data.Dataset.from_tensor_slices(X_pde_i)
+        # if self.weight_values is not None:
+        #    self.optimizer.set_weights(self.weight_values)
+        #    self.weight_values = None
 
         for epoch in range(epochs):
             if epoch % print_interval == 0:
@@ -482,10 +489,9 @@ class TINN(tf.Module):
                     x_batch_train,
                     y_batch_train,
                     p_batch_train,
-                    regularise,
+                    regularise and epoch % regularise_interval == 0,
                     step == 0,
                     step == last_step,
-                    optimizer,
                     train_acc_metric,
                 )
 
@@ -493,10 +499,10 @@ class TINN(tf.Module):
                     last_step = step
                 # add the batch loss: Note that the weights are calculated based on the batch size
                 #                     especifically, the last batch can have a different size
-                # w_obs = len(o_batch_indices) / x1_size
-                w_obs = batch_size / x_size
-                # w_pde = w_obs if p_batch_train is None else len(p_batch_indices) / x2_size
-                w_pde = w_obs / x_pde_size  # if p_batch_train is None else batch_size / x2_size
+                current_batch_size = x_batch_train.shape[0]
+                current_pde_batch_size = current_batch_size if p_batch_train is None else p_batch_train.shape[0]
+                w_obs = current_batch_size / x_size
+                w_pde = current_pde_batch_size / x_pde_size  # if p_batch_train is None else batch_size / x2_size
 
                 self.loss_reg_total += loss_value_batch
                 self.loss_obs_u += loss_obs_u_batch * w_obs
@@ -768,13 +774,51 @@ class TINN(tf.Module):
         #   os.makedirs(path.joinpath(name))
         with open(f"{str(path)}.pkl", "wb") as f:
             pickle.dump(self, f)
+        # symbolic_weights = getattr(self.optimizer, "weights")
+        weight_values = self.optimizer.get_weights()  # tf.keras.backend.batch_get_value(symbolic_weights)
+        with open(f"{str(path)}_optimizer.pkl", "wb") as f:
+            pickle.dump(weight_values, f)
 
     @classmethod
-    def restore(cls, path_dir, name):
+    def restore(cls, path_dir, name, optimizer=keras.optimizers.Adam(learning_rate=5e-4)):
         path = pathlib.PurePath(path_dir).joinpath(name)
         # asset = tf.saved_model.load(str(path))
         with open(f"{str(path)}.pkl", "rb") as f:
             model = pickle.load(f)
+        with open(f"{str(path)}_optimizer.pkl", "rb") as f:
+            weight_values = pickle.load(f)
+            model.optimizer = optimizer
+            # model.weight_values = weight_values
+            trainables = model.pinn.trainable_variables + model.pde_residual.trainables()
+            for extra_loss in model.extra_loss:
+                trainables += extra_loss.trainables()
+
+            if model.non_zero_loss is not None:
+                non_zero_params = model.non_zero_loss.parameters
+            # dummy zero gradients
+            zero_grads = [tf.zeros_like(w) for w in trainables]
+            # save current state of variables
+            saved_vars = [tf.identity(w) for w in trainables]
+
+            if model.non_zero_loss is not None:
+                # dummy zero gradients
+                zero_grads_params = [tf.zeros_like(w) for w in model.non_zero_loss.parameters]
+                # save current state of variables
+                saved_vars_params = [tf.identity(w) for w in model.non_zero_loss.parameters]
+
+            # Apply gradients which don't do nothing with Adam
+            model.optimizer.apply_gradients(zip(zero_grads, trainables))
+            if model.non_zero_loss is not None:
+                model.optimizer.apply_gradients(zip(zero_grads_params, model.non_zero_loss.parameters))
+
+            # Reload variables
+            [x.assign(y) for x, y in zip(trainables, saved_vars)]
+            if model.non_zero_loss is not None:
+                [x.assign(y) for x, y in zip(model.non_zero_loss.parameters, saved_vars_params)]
+
+            # Set the weights of the optimizer
+            model.optimizer.set_weights(weight_values)
+
         return model
 
 
@@ -1024,6 +1068,7 @@ class TINN_inverse(tf.Module):
             x2_size = len(X_pde)
         # For first epoch, we store the number of steps to compelete a full epoch
         last_step = -1
+
         start_time = time.time()
 
         for epoch in range(epochs):

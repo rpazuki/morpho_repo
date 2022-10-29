@@ -1,6 +1,8 @@
 import os
+from itertools import zip_longest
 import pathlib
 from collections import namedtuple
+import warnings
 import numpy as np
 import tensorflow as tf
 
@@ -15,6 +17,7 @@ Simulation = namedtuple(
         "t_start",
         "t_end",
         "t_steps",
+        "dt_arr",
         "parameters",
         "steady_state_func",
         "perturbation_size",
@@ -23,15 +26,50 @@ Simulation = namedtuple(
         "sample_parameters",
         "sample_parameters_num",
         "sample_parameters_std",
+        "same_init",
+        "c0",
+    ],
+    defaults=[
+        "Brusselator",
+        (128, 128),
+        (2, 2),
+        (0.002, 0.04),
+        # 0.05, 0, 128, 64,
+        0.001,
+        0,
+        128,
+        128 + 1,
+        None,
+        {"A": 2, "B": 3},
+        None,
+        0.1,
+        None,
+        1e-3,
+        True,
+        30,
+        (0.5, 0.5),
+        False,
+        None,
     ],
 )
 
 
 class TINN_Dataset(tf.data.Dataset):
     # def
-    def __new__(cls, X, Y, X_PDE=None, shuffle=True):
+    def __new__(cls, X, Y, X_PDE=None, shuffle=True, dtype=tf.float64):
 
-        ds = tf.data.Dataset.from_tensor_slices((X, Y) if X_PDE is None else (X, Y, X_PDE))
+        if X_PDE is None:
+            ds = tf.data.Dataset.from_tensor_slices((X, Y))
+        else:
+
+            def gen():
+                for x, y, p in zip_longest(X, Y, X_PDE):
+                    yield (x, y, p)
+
+            ds = tf.data.Dataset.from_generator(
+                gen,
+                output_types=(dtype, dtype, dtype),
+            )
         if shuffle:
             ds = ds.shuffle(len(X), reshuffle_each_iteration=True)
 
@@ -42,7 +80,7 @@ class TINN_Dataset(tf.data.Dataset):
 
 
 class TINN_Single_Sim_Dataset(TINN_Dataset):
-    def __new__(cls, path, name, thining_start=0, thining_step=0, pde_ratio=0, shuffle=True):
+    def __new__(cls, path, name, dtype=tf.float64, thining_start=0, thining_step=0, pde_ratio=0, shuffle=True):
         data_path = pathlib.PurePath(path)
         with open(data_path.joinpath(f"{name}.npy"), "rb") as f:
             data = np.load(f)
@@ -74,11 +112,157 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
             pde_X = dataset["pde"]
         else:
             pde_X = None
-        ds = super().__new__(cls, obs_X, obs_Y, pde_X, shuffle)
+        ds = super().__new__(cls, obs_X, obs_Y, pde_X, shuffle, dtype)
         setattr(ds, "lb", dataset["lb"])
         setattr(ds, "ub", dataset["ub"])
         setattr(ds, "simulation", simulation)
         setattr(ds, "ts", t_star)
+        old_cache_method = ds.cache
+        # old_batch_method = ds.batch
+
+        def set_att_from(ds_new, ds_old):
+            setattr(ds_new, "x_size", ds_old.x_size)
+            setattr(ds_new, "x_pde_size", ds_old.x_pde_size)
+            setattr(ds_new, "lb", ds_old.lb)
+            setattr(ds_new, "ub", ds_old.ub)
+            setattr(ds_new, "simulation", ds_old.simulation)
+            setattr(ds_new, "ts", ds_old.ts)
+            # setattr(ds_new, "cache", ds_old.cache)
+
+        # setattr(ds_new, "batch", ds_old.batch)
+
+        def overide_cache(filename=""):
+            ds2 = old_cache_method(filename)
+            set_att_from(ds2, ds)
+            return ds2
+
+        # def overide_batch(batch_size, drop_remainder=False, num_parallel_calls=None, deterministic=None, name=None):
+        #    ds2 = old_batch_method(batch_size, drop_remainder, num_parallel_calls, deterministic, name)
+        #    set_att_from(ds2, ds)
+        #    return ds2
+
+        setattr(ds, "cache", overide_cache)
+        # setattr(ds, "batch", overide_batch)
+
+        return ds
+
+
+class TINN_Multiple_Sim_Dataset(TINN_Dataset):
+    def __new__(
+        cls,
+        path,
+        names,
+        param_names,
+        dtype=tf.float64,
+        thining_start=0,
+        thining_step=0,
+        obs_ratio=1,
+        pde_ratio=0,
+        shuffle=True,
+    ):
+        assert len(names) > 0
+        data_path = pathlib.PurePath(path)
+        data_sources = []
+        simulations = []
+        ls_ts = []
+        ls_obs_X = []
+        ls_obs_Y = []
+        ls_pde_X = []
+        ubs = []
+        lbs = []
+        for name in names:
+            with open(data_path.joinpath(name).joinpath(f"{name}.npy"), "rb") as f:
+                data = np.load(f)
+                data_sources += [data]
+            with open(data_path.joinpath(name).joinpath("simulation.txt"), "r") as f:
+                simulation = eval(f.read())
+                simulations += [simulation]
+            t_star = np.linspace(simulation.t_start, simulation.t_end, simulation.t_steps)
+            # Thining the dataset
+            t_star = t_star[thining_start:]
+            data = data[..., thining_start:]
+            if thining_step > 0:
+                t_star = t_star[::thining_step]
+                data = data[..., ::thining_step]
+
+            T = t_star.shape[0]
+
+            L = simulation.L[0]
+            x_size = simulation.n[0]  #
+            y_size = simulation.n[1]  #
+            N = x_size * y_size
+
+            model_params = {"training_data_size": (T * N) // obs_ratio}
+            if pde_ratio > 0:
+                model_params = {**model_params, **{"pde_data_size": (T * N) // pde_ratio}}
+
+            dataset = create_dataset(data, t_star, N, T, L, **model_params)
+            obs_X = dataset["obs_input"]
+            obs_Y = dataset["obs_output"]
+            if pde_ratio > 0:
+                pde_X = dataset["pde"]
+            else:
+                pde_X = None
+            ls_ts += [t_star]
+
+            for k in param_names:
+                obs_X = np.concatenate(
+                    [obs_X, np.repeat(simulation.parameters[k], obs_X.shape[0])[..., np.newaxis]], axis=1
+                )
+                if pde_X is not None:
+                    pde_X = np.concatenate(
+                        [pde_X, np.repeat(simulation.parameters[k], pde_X.shape[0])[..., np.newaxis]], axis=1
+                    )
+
+            ls_obs_X += [obs_X]
+            ls_obs_Y += [obs_Y]
+            ls_pde_X += [pde_X]
+            if pde_X is None:
+                lb, ub = lower_upper_bounds([obs_X])
+            else:
+                lb, ub = lower_upper_bounds([np.concatenate([obs_X, pde_X], axis=0)])
+
+            for i, k in enumerate(param_names):
+                # the first three columns are x, y, t. So, the index starts from 3.
+                lb_i = lb[3 + i]
+                ub_i = ub[3 + i]
+                if lb_i == ub_i:
+                    warnings.warn(f"Warning: the parameter '{k}' is constant: {lb_i}.")
+                    # setting lb_1 = -1, lb_i = 1
+                    lb[3 + i] = -1
+                    ub[3 + i] = 1
+            lbs += [lb]
+            ubs += [ub]
+
+        ds = super().__new__(
+            cls,
+            np.concatenate(ls_obs_X, axis=0),
+            np.concatenate(ls_obs_Y, axis=0),
+            None if ls_pde_X[0] is None else np.concatenate(ls_pde_X, axis=0),
+            shuffle,
+            dtype,
+        )
+
+        setattr(ds, "lb", np.min(lbs, axis=0))
+        setattr(ds, "ub", np.max(ubs, axis=0))
+        setattr(ds, "simulations", simulations)
+        setattr(ds, "ls_ts", ls_ts)
+        old_cache_method = ds.cache
+
+        def set_att_from(ds_new, ds_old):
+            setattr(ds_new, "x_size", ds_old.x_size)
+            setattr(ds_new, "x_pde_size", ds_old.x_pde_size)
+            setattr(ds_new, "lb", ds_old.lb)
+            setattr(ds_new, "ub", ds_old.ub)
+            setattr(ds_new, "simulations", ds_old.simulations)
+            setattr(ds_new, "ls_ts", ds_old.ls_ts)
+
+        def overide_cache(filename=""):
+            ds2 = old_cache_method(filename)
+            set_att_from(ds2, ds)
+            return ds2
+
+        setattr(ds, "cache", overide_cache)
         return ds
 
 
