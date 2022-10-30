@@ -9,6 +9,10 @@ from .utils import indices, TINN_Dataset
 import pickle
 
 
+def default_printer(s):
+    print(s)
+
+
 class NN(tf.Module):
     def __init__(self, layers, lb, ub, dtype=tf.float32, **kwargs):
         """A dense Neural Net that is specified by layers argument.
@@ -155,6 +159,10 @@ class PDE_Residual(tf.Module):
         self.print_precision = print_precision
         self._trainables_ = ()
 
+    def add_trainable(self, param, param_name):
+        setattr(self, param_name, param.build())
+        self._trainables_ += param.trainable
+
     # @tf.function
     def residual(self, pinn, x):
         """A tensorflow function that calculates and returns the loss
@@ -213,6 +221,10 @@ class PDE_Residual(tf.Module):
             return val
         else:
             return val[0]
+
+    def set_parameters(self, parameters):
+        for k, v in parameters.items():
+            self.__dict__[k].set_value(v)
 
     def parameter_names(self):
         return [f"{v.name.split(':')[0]}" for v in self.trainables()]
@@ -442,6 +454,7 @@ class TINN(tf.Module):
         regularise=True,
         regularise_interval=1,
         train_acc_metric=keras.metrics.MeanSquaredError(),
+        printer=default_printer,
     ):
 
         # Samplling arrays
@@ -466,7 +479,7 @@ class TINN(tf.Module):
 
         for epoch in range(epochs):
             if epoch % print_interval == 0:
-                print(f"\nStart of epoch {epoch:d}")
+                printer(f"\nStart of epoch {epoch:d}")
 
             step = 0
             # Iterate over the batches of the dataset.
@@ -529,18 +542,18 @@ class TINN(tf.Module):
             )
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
-                self._print_metrics_()
+                self._print_metrics_(printer)
             if stop_threshold >= float(self.train_acc):
-                print("############################################")
-                print("#               Early stop                 #")
-                print("############################################")
+                printer("############################################")
+                printer("#               Early stop                 #")
+                printer("############################################")
                 return samples
             # end for epoch in range(epochs)
             # Reset training metrics at the end of each epoch
             train_acc_metric.reset_states()
             self._reset_losses_()
             if epoch % print_interval == 0:
-                print(f"Time taken: {(time.time() - start_time):.2f}s")
+                printer(f"Time taken: {(time.time() - start_time):.2f}s")
                 start_time = time.time()
 
         return samples
@@ -736,34 +749,34 @@ class TINN(tf.Module):
             for param in self.pde_residual.trainables():
                 samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
-    def _print_metrics_(self):
-        print(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
-        print(
+    def _print_metrics_(self, printer=default_printer):
+        printer(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
+        printer(
             f"total loss: {self.loss_total:{self.print_precision}}, "
             f"total regularisd loss (sum of batches): {self.loss_reg_total:{self.print_precision}}"
         )
-        print(
+        printer(
             f"obs u loss: {self.loss_obs_u:{self.print_precision}}, "
             f"obs v loss: {self.loss_obs_v:{self.print_precision}}"
         )
-        print(
+        printer(
             f"pde u loss: {self.loss_pde_u:{self.print_precision}}, "
             f"pde v loss: {self.loss_pde_v:{self.print_precision}}"
         )
         if self.non_zero_loss is not None:
-            print(f"Non-zero loss: {self.loss_non_zero:{self.print_precision}}, ")
-        print(
+            printer(f"Non-zero loss: {self.loss_non_zero:{self.print_precision}}, ")
+        printer(
             f"lambda obs u: {self.lambda_obs_u.numpy():{self.print_precision}}, "
             f"lambda obs v: {self.lambda_obs_v.numpy():{self.print_precision}}"
         )
-        print(
+        printer(
             f"lambda pde u: {self.lambda_pde_u.numpy():{self.print_precision}}, "
             f"lambda pde v: {self.lambda_pde_v.numpy():{self.print_precision}}"
         )
-        print(self.pde_residual.trainables_str())
+        printer(self.pde_residual.trainables_str())
         if self.extra_loss_len > 0:
             for i, loss in enumerate(self.extra_loss):
-                print(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")
+                printer(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")
 
     def save(self, path_dir, name):
         path = pathlib.PurePath(path_dir).joinpath(name)

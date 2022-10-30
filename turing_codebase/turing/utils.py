@@ -80,7 +80,9 @@ class TINN_Dataset(tf.data.Dataset):
 
 
 class TINN_Single_Sim_Dataset(TINN_Dataset):
-    def __new__(cls, path, name, dtype=tf.float64, thining_start=0, thining_step=0, pde_ratio=0, shuffle=True):
+    def __new__(
+        cls, path, name, dtype=tf.float64, thining_start=0, thining_step=0, pde_ratio=0, signal_to_noise=0, shuffle=True
+    ):
         data_path = pathlib.PurePath(path)
         with open(data_path.joinpath(f"{name}.npy"), "rb") as f:
             data = np.load(f)
@@ -101,7 +103,7 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
         y_size = simulation.n[1]  #
         N = x_size * y_size
 
-        model_params = {"training_data_size": T * N}
+        model_params = {"training_data_size": T * N, "signal_to_noise": signal_to_noise}
         if pde_ratio > 0:
             model_params = {**model_params, **{"pde_data_size": (T * N) / pde_ratio}}
 
@@ -640,25 +642,39 @@ def merge_dict_multi_nodes(dict_1, *dicts):
 #     return ret
 
 
-def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"], yscale="log", y_lims=None):
+def plot_result(
+    results,
+    param_names=None,
+    start=0,
+    end=-1,
+    node_names=["u", "v"],
+    yscale="log",
+    y_lims=None,
+    figsize=(14, 5),
+    file_name=None,
+):
     import matplotlib.pyplot as plt
 
-    def _closing_commands_():
+    def _closing_commands_(plot_name=""):
         plt.legend()
         plt.grid()
         plt.xlabel("Iterations")
         plt.yscale(yscale)
         if y_lims is not None:
             plt.ylim(y_lims)
-        plt.show()
+        if file_name is not None:
+            plt.savefig((f"{file_name}_{plot_name}.png"), bbox_inches="tight")
+            plt.close()
+        else:
+            plt.show()
 
-    _ = plt.figure(figsize=(14, 5))
+    _ = plt.figure(figsize=figsize)
     plt.title("Training accuracy for observations")
     plt.plot(results["training_obs_accuracy"][start:end], label="accuracy")
-    _closing_commands_()
+    _closing_commands_("training_accuracy")
 
     if np.any([True if k.startswith("loss_") else False for k in results.keys()]):
-        _ = plt.figure(figsize=(14, 5))
+        _ = plt.figure(figsize=figsize)
         plt.title("Real Loss")
         plt.plot(results["loss_total"][start:end], label="total")
         for name in node_names:
@@ -667,16 +683,16 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
             plt.plot(results[f"loss_pde_{name}"][start:end], label=f"PDE {name}")
         for key in [k for k in results.keys() if k.startswith("loss_extra_")]:
             plt.plot(results[key][start:end], label=f"{key}")
-        _closing_commands_()
+        _closing_commands_("losses")
 
     if "loss_non_zero" in results.keys():
-        _ = plt.figure(figsize=(14, 5))
+        _ = plt.figure(figsize=figsize)
         plt.plot(results["loss_non_zero"][start:end], label="loss_non_zero")
 
-        _closing_commands_()
+        _closing_commands_("non_zero_loss")
 
     if np.any([True if k.startswith("loss_") else False for k in results.keys()]):
-        _ = plt.figure(figsize=(14, 5))
+        _ = plt.figure(figsize=figsize)
         plt.title("Regularisd Loss")
         plt.plot(results["loss_regularisd_total"][start:end], label="total")
         if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
@@ -690,10 +706,10 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
                     results[f"lambda_pde_{name}"][start:end] * results[f"loss_pde_{name}"][start:end],
                     label=f"PDE {name}",
                 )
-        _closing_commands_()
+        _closing_commands_("regularisd_losses")
 
     if np.any([True if k.startswith("grads_") else False for k in results.keys()]):
-        _ = plt.figure(figsize=(14, 5))
+        _ = plt.figure(figsize=figsize)
         plt.title("Gradient Norms")
         for name in node_names:
             plt.plot(results[f"grads_obs_{name}"][start:end], label=f"Grad obs {name}")
@@ -702,10 +718,10 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
         if np.any([True if k.startswith("grad_norm_pde_params_") else False for k in results.keys()]):
             for name in node_names:
                 plt.plot(results[f"grad_norm_pde_params_{name}"][start:end], label=f"Grad PDE params {name}")
-        _closing_commands_()
+        _closing_commands_("gradient_norms")
 
     if np.any([True if k.startswith("lambda_") else False for k in results.keys()]):
-        _ = plt.figure(figsize=(14, 5))
+        _ = plt.figure(figsize=figsize)
         plt.title(r"$\lambda$s")
         for name in node_names:
             plt.plot(results[f"lambda_obs_{name}"][start:end], label=r"$\lambda$" f" obs {name}")
@@ -714,14 +730,14 @@ def plot_result(results, param_names=None, start=0, end=-1, node_names=["u", "v"
         if np.any([True if k.startswith("lambda_pde_params_") else False for k in results.keys()]):
             for name in node_names:
                 plt.plot(results[f"lambda_pde_params_{name}"][start:end], label=r"$\lambda$" f" PDE params {name}")
-        _closing_commands_()
+        _closing_commands_("lambdas")
 
     if param_names is not None:
-        _ = plt.figure(figsize=(14, 5))
+        _ = plt.figure(figsize=figsize)
         plt.title(r"Estimated parameters")
         for name in param_names:
             plt.plot(results[f"{name}"][start:end], label=f"{name}")
-        _closing_commands_()
+        _closing_commands_("parameters")
 
 
 def plot_result_multi_nodes(
