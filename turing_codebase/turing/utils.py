@@ -3,6 +3,7 @@ from itertools import zip_longest
 import pathlib
 from collections import namedtuple
 import warnings
+import pickle
 import numpy as np
 import tensorflow as tf
 
@@ -59,7 +60,7 @@ class TINN_Dataset(tf.data.Dataset):
     def __new__(cls, X, Y, X_PDE=None, shuffle=True, dtype=tf.float64):
 
         if X_PDE is None:
-            ds = tf.data.Dataset.from_tensor_slices((X, Y))
+            ds = tf.data.Dataset.from_tensor_slices((X, Y)).map(lambda x, y: (tf.cast(x, dtype), tf.cast(y, dtype)))
         else:
 
             def gen():
@@ -75,8 +76,30 @@ class TINN_Dataset(tf.data.Dataset):
 
         setattr(ds, "x_size", len(X))
         setattr(ds, "x_pde_size", ds.x_size if X_PDE is None else len(X_PDE))
+
+        def override_save(path_dir, name):
+            return cls.save(ds, path_dir, name)
+
+        setattr(ds, "save", override_save)
         # setattr(ds, "X", X)
         return ds
+
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        with open(f"{str(path)}_X.pkl", "wb") as f:
+            pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
+        with open(f"{str(path)}_Y.pkl", "wb") as f:
+            pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
+
+    @classmethod
+    def restore(cls, path_dir, name, dtype=tf.float64):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}_X.pkl", "rb") as f:
+            X = pickle.load(f)
+        with open(f"{str(path)}_Y.pkl", "rb") as f:
+            Y = pickle.load(f)
+        return TINN_Dataset(X, Y, shuffle=False, dtype=dtype)
 
 
 class TINN_Single_Sim_Dataset(TINN_Dataset):
@@ -119,33 +142,77 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
         setattr(ds, "ub", dataset["ub"])
         setattr(ds, "simulation", simulation)
         setattr(ds, "ts", t_star)
-        old_cache_method = ds.cache
+        # old_cache_method = ds.cache
         # old_batch_method = ds.batch
 
-        def set_att_from(ds_new, ds_old):
-            setattr(ds_new, "x_size", ds_old.x_size)
-            setattr(ds_new, "x_pde_size", ds_old.x_pde_size)
-            setattr(ds_new, "lb", ds_old.lb)
-            setattr(ds_new, "ub", ds_old.ub)
-            setattr(ds_new, "simulation", ds_old.simulation)
-            setattr(ds_new, "ts", ds_old.ts)
-            # setattr(ds_new, "cache", ds_old.cache)
+        # def set_att_from(ds_new, ds_old):
+        #     setattr(ds_new, "x_size", ds_old.x_size)
+        #     setattr(ds_new, "x_pde_size", ds_old.x_pde_size)
+        #     setattr(ds_new, "lb", ds_old.lb)
+        #     setattr(ds_new, "ub", ds_old.ub)
+        #     setattr(ds_new, "simulation", ds_old.simulation)
+        #     setattr(ds_new, "ts", ds_old.ts)
+        #     # setattr(ds_new, "cache", ds_old.cache)
 
-        # setattr(ds_new, "batch", ds_old.batch)
+        # # setattr(ds_new, "batch", ds_old.batch)
 
-        def overide_cache(filename=""):
-            ds2 = old_cache_method(filename)
-            set_att_from(ds2, ds)
-            return ds2
+        # def overide_cache(filename=""):
+        #     ds2 = old_cache_method(filename)
+        #     set_att_from(ds2, ds)
+        #     return ds2
 
-        # def overide_batch(batch_size, drop_remainder=False, num_parallel_calls=None, deterministic=None, name=None):
-        #    ds2 = old_batch_method(batch_size, drop_remainder, num_parallel_calls, deterministic, name)
-        #    set_att_from(ds2, ds)
-        #    return ds2
+        # # def overide_batch(batch_size, drop_remainder=False, num_parallel_calls=None, deterministic=None, name=None):
+        # #    ds2 = old_batch_method(batch_size, drop_remainder, num_parallel_calls, deterministic, name)
+        # #    set_att_from(ds2, ds)
+        # #    return ds2
 
-        setattr(ds, "cache", overide_cache)
+        # setattr(ds, "cache", overide_cache)
         # setattr(ds, "batch", overide_batch)
 
+        return ds
+
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        with open(f"{str(path)}_params.pkl", "wb") as f:
+            pickle.dump([self.lb, self.ub, self.simulation, self.ts], f)
+        with open(f"{str(path)}_X.pkl", "wb") as f:
+            pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
+        with open(f"{str(path)}_Y.pkl", "wb") as f:
+            pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
+
+    @classmethod
+    def restore(cls, path_dir, name, dtype=tf.float64):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}_X.pkl", "rb") as f:
+            X = pickle.load(f)
+        with open(f"{str(path)}_Y.pkl", "rb") as f:
+            Y = pickle.load(f)
+        ds = TINN_Dataset(X, Y, shuffle=False, dtype=dtype)
+        old_cache_method = ds.cache
+
+        with open(f"{str(path)}_params.pkl", "rb") as f:
+            lb, ub, simulation, ts = pickle.load(f)
+
+        setattr(ds, "lb", lb)
+        setattr(ds, "ub", ub)
+        setattr(ds, "simulation", simulation)
+        setattr(ds, "ts", ts)
+
+        # def set_att_from(ds_new, ds_old):
+        #     setattr(ds_new, "x_size", ds_old.x_size)
+        #     setattr(ds_new, "x_pde_size", ds_old.x_pde_size)
+        #     setattr(ds_new, "lb", ds_old.lb)
+        #     setattr(ds_new, "ub", ds_old.ub)
+        #     setattr(ds_new, "simulation", ds_old.simulation)
+        #     setattr(ds_new, "ts", ds_old.ts)
+
+        # def overide_cache(filename=""):
+        #     ds2 = old_cache_method(filename)
+        #     set_att_from(ds2, ds)
+        #     return ds2
+
+        # setattr(ds, "cache", overide_cache)
         return ds
 
 

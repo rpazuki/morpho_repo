@@ -330,7 +330,9 @@ class TINN(tf.Module):
         self.loss_non_zero = 0
 
     @tf.function
-    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, train_acc_metric):
+    def __train_step__(
+        self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, train_acc_metric, dummy_train=False
+    ):
         with tf.GradientTape(persistent=True) as tape:
             if x_pde is None:
                 outputs, f_u, f_v = self.pde_residual.residual(self.pinn, x_obs)
@@ -378,12 +380,34 @@ class TINN(tf.Module):
         if self.non_zero_loss is not None:
             grads_non_zero = tape.gradient(non_zero_loss_value, self.non_zero_loss.parameters)
         #
-        self.optimizer.apply_gradients(zip(grads, trainables))
-        if self.non_zero_loss is not None:
-            self.optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
+        if dummy_train:
+            self.dummy_update_grads(trainables)
+        else:
+            self.optimizer.apply_gradients(zip(grads, trainables))
+            if self.non_zero_loss is not None:
+                self.optimizer.apply_gradients(zip(grads_non_zero, self.non_zero_loss.parameters))
+            train_acc_metric.update_state(y_obs, outputs)
 
-        train_acc_metric.update_state(y_obs, outputs)
         return loss_value, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, non_zero_loss_value, loss_extra_items
+
+    def dummy_update_grads(self, trainables):
+        # dummy zero gradients
+        zero_grads = [tf.zeros_like(w) for w in trainables]
+        # save current state of variables
+        saved_vars = [tf.identity(w) for w in trainables]
+        if self.non_zero_loss is not None:
+            # dummy zero gradients
+            zero_grads_params = [tf.zeros_like(w) for w in self.non_zero_loss.parameters]
+            # save current state of variables
+            saved_vars_params = [tf.identity(w) for w in self.non_zero_loss.parameters]
+            # Apply gradients which don't do nothing
+        self.optimizer.apply_gradients(zip(zero_grads, trainables))
+        if self.non_zero_loss is not None:
+            self.optimizer.apply_gradients(zip(zero_grads_params, self.non_zero_loss.parameters))
+            # Reload variables
+        [x.assign(y) for x, y in zip(trainables, saved_vars)]
+        if self.non_zero_loss is not None:
+            [x.assign(y) for x, y in zip(self.non_zero_loss.parameters, saved_vars_params)]
 
     def _update_lambdas_(
         self, x_pde, first_step, last_step, tape, loss_obs_u, loss_obs_v, loss_pde_u, loss_pde_v, trainables
@@ -469,7 +493,7 @@ class TINN(tf.Module):
         x_size = dataset.x_size
         x_pde_size = dataset.x_pde_size
         #
-        dataset = dataset.batch(batch_size)
+        dataset2 = dataset.cache().batch(batch_size)
         # if X_pde is None:
         # X_pde_i = X_pde[indeces_list]
         # dataset2 = tf.data.Dataset.from_tensor_slices(X_pde_i)
@@ -483,7 +507,7 @@ class TINN(tf.Module):
 
             step = 0
             # Iterate over the batches of the dataset.
-            for element in dataset:
+            for element in dataset2:
                 if len(element) == 2:
                     x_batch_train, y_batch_train = element
                     p_batch_train = None
@@ -780,58 +804,48 @@ class TINN(tf.Module):
 
     def save(self, path_dir, name):
         path = pathlib.PurePath(path_dir).joinpath(name)
-        # tf.saved_model.save(self, str(path))
-        #
-        # import os
-        # if not pathlib.Path(path.joinpath(name)).exists():
-        #   os.makedirs(path.joinpath(name))
+
+        # remove optimiser
+        opt = self.optimizer
+        # self.optimizer = None
+        delattr(self, "optimizer")
         with open(f"{str(path)}.pkl", "wb") as f:
             pickle.dump(self, f)
-        # symbolic_weights = getattr(self.optimizer, "weights")
+        # Restore optimizer
+        # self.optimizer = opt
+        setattr(self, "optimizer", opt)
+        # save optimizer state
         weight_values = self.optimizer.get_weights()  # tf.keras.backend.batch_get_value(symbolic_weights)
         with open(f"{str(path)}_optimizer.pkl", "wb") as f:
             pickle.dump(weight_values, f)
 
+        # save optimizer config
+        conf = self.optimizer.get_config()
+        with open(f"{str(path)}_optimizer_config.pkl", "wb") as f:
+            pickle.dump(conf, f)
+
     @classmethod
-    def restore(cls, path_dir, name, optimizer=keras.optimizers.Adam(learning_rate=5e-4)):
+    def restore(cls, path_dir, name, ds):
         path = pathlib.PurePath(path_dir).joinpath(name)
         # asset = tf.saved_model.load(str(path))
         with open(f"{str(path)}.pkl", "rb") as f:
             model = pickle.load(f)
         with open(f"{str(path)}_optimizer.pkl", "rb") as f:
             weight_values = pickle.load(f)
-            model.optimizer = optimizer
-            # model.weight_values = weight_values
-            trainables = model.pinn.trainable_variables + model.pde_residual.trainables()
-            for extra_loss in model.extra_loss:
-                trainables += extra_loss.trainables()
+        with open(f"{str(path)}_optimizer_config.pkl", "rb") as f:
+            conf = pickle.load(f)
 
-            if model.non_zero_loss is not None:
-                non_zero_params = model.non_zero_loss.parameters
-            # dummy zero gradients
-            zero_grads = [tf.zeros_like(w) for w in trainables]
-            # save current state of variables
-            saved_vars = [tf.identity(w) for w in trainables]
+        model.optimizer = keras.optimizers.Adam(learning_rate=5e-4).from_config(conf)
+        obs = next(iter(ds.batch(2).take(1)))
+        if len(obs) == 2:
+            X, Y = obs
+            x_pde = None
+        else:
+            X, Y, x_pde = obs
+        model.__train_step__(X, Y, x_pde, False, False, False, None, dummy_train=True)
 
-            if model.non_zero_loss is not None:
-                # dummy zero gradients
-                zero_grads_params = [tf.zeros_like(w) for w in model.non_zero_loss.parameters]
-                # save current state of variables
-                saved_vars_params = [tf.identity(w) for w in model.non_zero_loss.parameters]
-
-            # Apply gradients which don't do nothing with Adam
-            model.optimizer.apply_gradients(zip(zero_grads, trainables))
-            if model.non_zero_loss is not None:
-                model.optimizer.apply_gradients(zip(zero_grads_params, model.non_zero_loss.parameters))
-
-            # Reload variables
-            [x.assign(y) for x, y in zip(trainables, saved_vars)]
-            if model.non_zero_loss is not None:
-                [x.assign(y) for x, y in zip(model.non_zero_loss.parameters, saved_vars_params)]
-
-            # Set the weights of the optimizer
-            model.optimizer.set_weights(weight_values)
-
+        # Set the weights of the optimizer
+        model.optimizer.set_weights(weight_values)
         return model
 
 
