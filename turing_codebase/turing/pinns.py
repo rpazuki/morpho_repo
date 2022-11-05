@@ -805,6 +805,10 @@ class TINN(tf.Module):
     def save(self, path_dir, name):
         path = pathlib.PurePath(path_dir).joinpath(name)
 
+        # save optimizer state
+        weight_values = self.optimizer.get_weights()  # tf.keras.backend.batch_get_value(symbolic_weights)
+        with open(f"{str(path)}_optimizer.pkl", "wb") as f:
+            pickle.dump(weight_values, f)
         # remove optimiser
         opt = self.optimizer
         # self.optimizer = None
@@ -814,10 +818,6 @@ class TINN(tf.Module):
         # Restore optimizer
         # self.optimizer = opt
         setattr(self, "optimizer", opt)
-        # save optimizer state
-        weight_values = self.optimizer.get_weights()  # tf.keras.backend.batch_get_value(symbolic_weights)
-        with open(f"{str(path)}_optimizer.pkl", "wb") as f:
-            pickle.dump(weight_values, f)
 
         # save optimizer config
         conf = self.optimizer.get_config()

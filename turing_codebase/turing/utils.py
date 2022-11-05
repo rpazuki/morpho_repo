@@ -1,5 +1,5 @@
 import os
-from itertools import zip_longest
+from itertools import cycle, zip_longest
 import pathlib
 from collections import namedtuple
 import warnings
@@ -64,8 +64,16 @@ class TINN_Dataset(tf.data.Dataset):
         else:
 
             def gen():
-                for x, y, p in zip_longest(X, Y, X_PDE):
-                    yield (x, y, p)
+                l_x = len(X)
+                l_pde = len(X_PDE)
+                if l_x <= l_pde:
+                    for x, y, p in zip(cycle(X), cycle(Y), X_PDE):
+                        yield (x, y, p)
+                else:
+                    for x, y, p in zip(X, Y, cycle(X_PDE)):
+                        yield (x, y, p)
+                # for x, y, p in zip_longest(X, Y, X_PDE):
+                #    yield (x, y, p)
 
             ds = tf.data.Dataset.from_generator(
                 gen,
@@ -74,8 +82,11 @@ class TINN_Dataset(tf.data.Dataset):
         if shuffle:
             ds = ds.shuffle(len(X), reshuffle_each_iteration=True)
 
-        setattr(ds, "x_size", len(X))
-        setattr(ds, "x_pde_size", ds.x_size if X_PDE is None else len(X_PDE))
+        setattr(ds, "__parameters__", {})
+        ds.__parameters__["x_size"] = len(X)
+        setattr(ds, "x_size", ds.__parameters__["x_size"])
+        ds.__parameters__["x_pde_size"] = ds.x_size if X_PDE is None else len(X_PDE)
+        setattr(ds, "x_pde_size", ds.__parameters__["x_pde_size"])
 
         def override_save(path_dir, name):
             return cls.save(ds, path_dir, name)
@@ -90,6 +101,8 @@ class TINN_Dataset(tf.data.Dataset):
             pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
         with open(f"{str(path)}_Y.pkl", "wb") as f:
             pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
+        with open(f"{str(path)}_parameters.pkl", "wb") as f:
+            pickle.dump(self.__parameters__, f)
 
     @classmethod
     def restore(cls, path_dir, name, dtype=tf.float64):
@@ -99,13 +112,35 @@ class TINN_Dataset(tf.data.Dataset):
             X = pickle.load(f)
         with open(f"{str(path)}_Y.pkl", "rb") as f:
             Y = pickle.load(f)
-        return TINN_Dataset(X, Y, shuffle=False, dtype=dtype)
+        with open(f"{str(path)}_parameters.pkl", "rb") as f:
+            __parameters__ = pickle.load(f)
+
+        ret = TINN_Dataset(X, Y, shuffle=False, dtype=dtype)
+        ret.__parameters__ = __parameters__
+        for k, v in __parameters__.items():
+            setattr(ret, k, v)
+
+        return ret
 
 
 class TINN_Single_Sim_Dataset(TINN_Dataset):
     def __new__(
-        cls, path, name, dtype=tf.float64, thining_start=0, thining_step=0, pde_ratio=0, signal_to_noise=0, shuffle=True
+        cls,
+        path,
+        name,
+        dtype=tf.float64,
+        thining_start=0,
+        thining_step=0,
+        pde_ratio=0,
+        signal_to_noise=0,
+        shuffle=True,
+        __internal__=False,
+        __obs_X__=None,
+        __obs_Y__=None,
     ):
+        if __internal__:
+            ds = super().__new__(cls, __obs_X__, __obs_Y__, None, False, dtype)
+            return ds
         data_path = pathlib.PurePath(path)
         with open(data_path.joinpath(f"{name}.npy"), "rb") as f:
             data = np.load(f)
@@ -138,10 +173,14 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
         else:
             pde_X = None
         ds = super().__new__(cls, obs_X, obs_Y, pde_X, shuffle, dtype)
-        setattr(ds, "lb", dataset["lb"])
-        setattr(ds, "ub", dataset["ub"])
-        setattr(ds, "simulation", simulation)
-        setattr(ds, "ts", t_star)
+        ds.__parameters__["lb"] = dataset["lb"]
+        setattr(ds, "lb", ds.__parameters__["lb"])
+        ds.__parameters__["ub"] = dataset["ub"]
+        setattr(ds, "ub", ds.__parameters__["ub"])
+        ds.__parameters__["simulation"] = simulation
+        setattr(ds, "simulation", ds.__parameters__["simulation"])
+        ds.__parameters__["ts"] = t_star
+        setattr(ds, "ts", ds.__parameters__["ts"])
         # old_cache_method = ds.cache
         # old_batch_method = ds.batch
 
@@ -171,15 +210,6 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
 
         return ds
 
-    def save(self, path_dir, name):
-        path = pathlib.PurePath(path_dir).joinpath(name)
-        with open(f"{str(path)}_params.pkl", "wb") as f:
-            pickle.dump([self.lb, self.ub, self.simulation, self.ts], f)
-        with open(f"{str(path)}_X.pkl", "wb") as f:
-            pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
-        with open(f"{str(path)}_Y.pkl", "wb") as f:
-            pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
-
     @classmethod
     def restore(cls, path_dir, name, dtype=tf.float64):
         path = pathlib.PurePath(path_dir).joinpath(name)
@@ -188,16 +218,39 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
             X = pickle.load(f)
         with open(f"{str(path)}_Y.pkl", "rb") as f:
             Y = pickle.load(f)
-        ds = TINN_Dataset(X, Y, shuffle=False, dtype=dtype)
-        old_cache_method = ds.cache
+        with open(f"{str(path)}_parameters.pkl", "rb") as f:
+            __parameters__ = pickle.load(f)
 
-        with open(f"{str(path)}_params.pkl", "rb") as f:
-            lb, ub, simulation, ts = pickle.load(f)
+        ret = TINN_Single_Sim_Dataset(None, None, __internal__=True, __obs_X__=X, __obs_Y__=Y)
 
-        setattr(ds, "lb", lb)
-        setattr(ds, "ub", ub)
-        setattr(ds, "simulation", simulation)
-        setattr(ds, "ts", ts)
+        for k, v in __parameters__.items():
+            setattr(ret, k, v)
+        ret.__parameters__ = __parameters__
+
+        # lb, ub, simulation, ts = __parameters__
+        # ret.__parameters__ = {"lb": lb, "ub": ub, "simulation": simulation, "ts": ts}
+        # setattr(ret, "lb", ret.__parameters__["lb"])
+        # setattr(ret, "ub", ret.__parameters__["ub"])
+        # setattr(ret, "simulation", ret.__parameters__["simulation"])
+        # setattr(ret, "ts", ret.__parameters__["ts"])
+
+        return ret
+        # path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        # with open(f"{str(path)}_X.pkl", "rb") as f:
+        #     X = pickle.load(f)
+        # with open(f"{str(path)}_Y.pkl", "rb") as f:
+        #     Y = pickle.load(f)
+        # ds = TINN_Dataset(X, Y, shuffle=False, dtype=dtype)
+        # old_cache_method = ds.cache
+
+        # with open(f"{str(path)}_parameters.pkl", "rb") as f:
+        #     lb, ub, simulation, ts = pickle.load(f)
+
+        # setattr(ds, "lb", lb)
+        # setattr(ds, "ub", ub)
+        # setattr(ds, "simulation", simulation)
+        # setattr(ds, "ts", ts)
 
         # def set_att_from(ds_new, ds_old):
         #     setattr(ds_new, "x_size", ds_old.x_size)
@@ -213,7 +266,7 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
         #     return ds2
 
         # setattr(ds, "cache", overide_cache)
-        return ds
+        # return ds
 
 
 class TINN_Multiple_Sim_Dataset(TINN_Dataset):
@@ -311,11 +364,15 @@ class TINN_Multiple_Sim_Dataset(TINN_Dataset):
             shuffle,
             dtype,
         )
+        ds.__parameters__["lb"] = np.min(lbs, axis=0)
+        setattr(ds, "lb", ds.__parameters__["lb"])
+        ds.__parameters__["ub"] = np.max(ubs, axis=0)
+        setattr(ds, "ub", ds.__parameters__["ub"])
+        ds.__parameters__["simulations"] = simulations
+        setattr(ds, "simulations", ds.__parameters__["simulations"])
+        ds.__parameters__["ls_ts"] = ls_ts
+        setattr(ds, "ls_ts", ds.__parameters__["ls_ts"])
 
-        setattr(ds, "lb", np.min(lbs, axis=0))
-        setattr(ds, "ub", np.max(ubs, axis=0))
-        setattr(ds, "simulations", simulations)
-        setattr(ds, "ls_ts", ls_ts)
         old_cache_method = ds.cache
 
         def set_att_from(ds_new, ds_old):
