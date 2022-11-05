@@ -72,8 +72,6 @@ class TINN_Dataset(tf.data.Dataset):
                 else:
                     for x, y, p in zip(X, Y, cycle(X_PDE)):
                         yield (x, y, p)
-                # for x, y, p in zip_longest(X, Y, X_PDE):
-                #    yield (x, y, p)
 
             ds = tf.data.Dataset.from_generator(
                 gen,
@@ -87,6 +85,8 @@ class TINN_Dataset(tf.data.Dataset):
         setattr(ds, "x_size", ds.__parameters__["x_size"])
         ds.__parameters__["x_pde_size"] = ds.x_size if X_PDE is None else len(X_PDE)
         setattr(ds, "x_pde_size", ds.__parameters__["x_pde_size"])
+        ds.__parameters__["has_x_pde"] = False if X_PDE is None else True
+        setattr(ds, "has_x_pde", ds.__parameters__["has_x_pde"])
 
         def override_save(path_dir, name):
             return cls.save(ds, path_dir, name)
@@ -97,10 +97,19 @@ class TINN_Dataset(tf.data.Dataset):
 
     def save(self, path_dir, name):
         path = pathlib.PurePath(path_dir).joinpath(name)
-        with open(f"{str(path)}_X.pkl", "wb") as f:
-            pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
-        with open(f"{str(path)}_Y.pkl", "wb") as f:
-            pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
+        if self.has_x_pde:
+            with open(f"{str(path)}_X.pkl", "wb") as f:
+                pickle.dump([(x.tolist()) for x, _, _ in self.as_numpy_iterator()], f)
+            with open(f"{str(path)}_Y.pkl", "wb") as f:
+                pickle.dump([(y.tolist()) for _, y, _ in self.as_numpy_iterator()], f)
+            with open(f"{str(path)}_X_PDE.pkl", "wb") as f:
+                pickle.dump([(x.tolist()) for _, _, x in self.as_numpy_iterator()], f)
+        else:
+            with open(f"{str(path)}_X.pkl", "wb") as f:
+                pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
+            with open(f"{str(path)}_Y.pkl", "wb") as f:
+                pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
+
         with open(f"{str(path)}_parameters.pkl", "wb") as f:
             pickle.dump(self.__parameters__, f)
 
@@ -112,10 +121,15 @@ class TINN_Dataset(tf.data.Dataset):
             X = pickle.load(f)
         with open(f"{str(path)}_Y.pkl", "rb") as f:
             Y = pickle.load(f)
+        if os.path.exists(f"{str(path)}_X_PDE.pkl"):
+            with open(f"{str(path)}_X_PDE.pkl", "rb") as f:
+                X_PDE = pickle.load(f)
+        else:
+            X_PDE = None
         with open(f"{str(path)}_parameters.pkl", "rb") as f:
             __parameters__ = pickle.load(f)
 
-        ret = TINN_Dataset(X, Y, shuffle=False, dtype=dtype)
+        ret = TINN_Dataset(X, Y, X_PDE, shuffle=False, dtype=dtype)
         ret.__parameters__ = __parameters__
         for k, v in __parameters__.items():
             setattr(ret, k, v)
@@ -137,9 +151,10 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
         __internal__=False,
         __obs_X__=None,
         __obs_Y__=None,
+        __obs_X_PDE__=None,
     ):
         if __internal__:
-            ds = super().__new__(cls, __obs_X__, __obs_Y__, None, False, dtype)
+            ds = super().__new__(cls, __obs_X__, __obs_Y__, __obs_X_PDE__, False, dtype)
             return ds
         data_path = pathlib.PurePath(path)
         with open(data_path.joinpath(f"{name}.npy"), "rb") as f:
@@ -218,10 +233,15 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
             X = pickle.load(f)
         with open(f"{str(path)}_Y.pkl", "rb") as f:
             Y = pickle.load(f)
+        if os.path.exists(f"{str(path)}_X_PDE.pkl"):
+            with open(f"{str(path)}_X_PDE.pkl", "rb") as f:
+                X_PDE = pickle.load(f)
+        else:
+            X_PDE = None
         with open(f"{str(path)}_parameters.pkl", "rb") as f:
             __parameters__ = pickle.load(f)
 
-        ret = TINN_Single_Sim_Dataset(None, None, __internal__=True, __obs_X__=X, __obs_Y__=Y)
+        ret = TINN_Single_Sim_Dataset(None, None, __internal__=True, __obs_X__=X, __obs_Y__=Y, __obs_X_PDE__=X_PDE)
 
         for k, v in __parameters__.items():
             setattr(ret, k, v)
