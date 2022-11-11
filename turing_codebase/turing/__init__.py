@@ -2,6 +2,7 @@ from .pinns import NN
 from .pinns import PDE_Residual, Loss
 from .pinns import TINN
 from .pinns_multi_nodes import TINN_multi_nodes
+from .utils import PDE_Parameter
 from . import utils
 
 __author__ = """Roozbeh H. Pazuki"""

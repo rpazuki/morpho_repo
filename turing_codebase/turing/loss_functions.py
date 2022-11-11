@@ -1,63 +1,11 @@
-from enum import Enum
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
+from .utils import Parameter_Type
+from .utils import PDE_Parameter
 from . import PDE_Residual
+from .utils import clip_by_value, clip_by_value_zero_lb
 from . import Loss
-
-
-class Parameter_Type(Enum):
-    CONSTANT = 1
-    VARIABLE = 2
-    INPUT = 3
-
-
-def clip_by_value(z):
-    return tf.clip_by_value(z, 1e-6, 1e10)
-
-
-class PDE_Parameter:
-    def __init__(self, name, parameter_type: Parameter_Type, value=1.0, index=-1, dtype=tf.float32):
-        self.name = name
-        self.parameter_type = parameter_type
-        self.dtype = dtype
-        self.value = value
-        self.index = index
-        self.trainable = ()
-
-    def build(self):
-        if self.parameter_type == Parameter_Type.CONSTANT:
-            self.tf_var = tf.constant(self.value, dtype=self.dtype, name=self.name)
-        elif self.parameter_type == Parameter_Type.VARIABLE:
-            self.tf_var = tf.Variable([self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value)
-            self.trainable = (self.tf_var,)
-        else:  # INPUT
-            self.tf_var = None
-
-        return self
-
-    def get_value(self, input):
-        if self.parameter_type == Parameter_Type.CONSTANT:
-            return self.tf_var
-        elif self.parameter_type == Parameter_Type.VARIABLE:
-            return self.tf_var
-        else:  # INPUT, self.index + 3 starts after (x, y, t)
-            return input[:, self.index + 3]
-
-    def set_value(self, value):
-        if self.parameter_type == Parameter_Type.CONSTANT:
-            self.value = value
-            try:
-                self.tf_var.assign(value)
-            except AttributeError:
-                self.tf_var = tf.constant(self.value, dtype=self.dtype, name=self.name)
-        elif self.parameter_type == Parameter_Type.VARIABLE:
-            self.value = value
-            try:
-                self.tf_var[0].assign(value)
-            except AttributeError:
-                self.tf_var = tf.Variable([self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value)
-        # else:  do nothing
 
 
 class L2(Loss):
@@ -110,7 +58,7 @@ class Non_zero_params(PDE_Residual):
         return tf.reduce_sum(f(params))
 
 
-class ASDM(PDE_Residual):
+class Koch_Meinhard(PDE_Residual):
     def __init__(
         self,
         D_u: PDE_Parameter,
@@ -121,15 +69,18 @@ class ASDM(PDE_Residual):
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
+        alpha_u=1.0,
+        alpha_v=1.0,
         print_precision=".5f",
     ):
-        """ASDM PDE loss
+        """Koch_Meinhard PDE loss
 
         if the parameter is None, it becomes traiable with initial value set as init_vale,
         otherwise, it will be a constant
+        alpha_u and alpha_v are scales that we use to normalise the u and v.
         """
 
-        super().__init__(name="Loss_ASDM", print_precision=print_precision)
+        super().__init__(name="Loss_Koch_Meinhard", print_precision=print_precision)
 
         self._trainables_ = ()
 
@@ -149,6 +100,9 @@ class ASDM(PDE_Residual):
         self._trainables_ += rho_v.trainable
         self.kappa_u = kappa_u.build()
         self._trainables_ += kappa_u.trainable
+
+        self.alpha_u = alpha_u
+        self.alpha_v = alpha_v
 
     @tf.function
     def residual(self, pinn, x):
@@ -174,12 +128,12 @@ class ASDM(PDE_Residual):
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
-        sigma_u = self.sigma_u.get_value(x)
-        sigma_v = self.sigma_v.get_value(x)
+        sigma_u = self.sigma_u.get_value(x) / self.alpha_u
+        sigma_v = self.sigma_v.get_value(x) / self.alpha_v
         mu_u = self.mu_u.get_value(x)
-        rho_u = self.rho_u.get_value(x)
-        rho_v = self.rho_v.get_value(x)
-        kappa_u = self.kappa_u.get_value(x)
+        rho_u = self.rho_u.get_value(x) * self.alpha_u * self.alpha_v
+        rho_v = self.rho_v.get_value(x) * self.alpha_u * self.alpha_u
+        kappa_u = self.kappa_u.get_value(x) * self.alpha_u * self.alpha_u
 
         f = u * u * v / (1.0 + kappa_u * u * u)
         f_u = u_t - D_u * (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
@@ -390,16 +344,24 @@ class Circuit2_variant5716(PDE_Residual):
         V_D: PDE_Parameter,
         V_E: PDE_Parameter,
         V_F: PDE_Parameter,
-        k_AA: PDE_Parameter,
+        k_AB: PDE_Parameter,
         k_BD: PDE_Parameter,
         k_CE: PDE_Parameter,
         k_DA: PDE_Parameter,
         k_EB: PDE_Parameter,
         k_EE: PDE_Parameter,
         k_FE: PDE_Parameter,
-        mu_A: PDE_Parameter,
-        mulv_A: PDE_Parameter,
+        mu_ASV: PDE_Parameter,
+        mu_lvA: PDE_Parameter,
+        nab: PDE_Parameter,
+        nbd: PDE_Parameter,
+        nce: PDE_Parameter,
+        nda: PDE_Parameter,
+        nfe: PDE_Parameter,
+        neb: PDE_Parameter,
+        nee: PDE_Parameter,
         print_precision=".5f",
+        masked=False,
     ):
         super().__init__(name="Circuit2_variant5716", print_precision=print_precision)
 
@@ -419,20 +381,34 @@ class Circuit2_variant5716(PDE_Residual):
         self.add_trainable(V_D, "V_D")
         self.add_trainable(V_E, "V_E")
         self.add_trainable(V_F, "V_F")
-        self.add_trainable(k_AA, "k_AA")
+        self.add_trainable(k_AB, "k_AB")
         self.add_trainable(k_BD, "k_BD")
         self.add_trainable(k_CE, "k_CE")
         self.add_trainable(k_DA, "k_DA")
         self.add_trainable(k_EB, "k_EB")
         self.add_trainable(k_EE, "k_EE")
         self.add_trainable(k_FE, "k_FE")
-        self.add_trainable(mu_A, "mu_A")
-        self.add_trainable(mulv_A, "mulv_A")
+        self.add_trainable(mu_ASV, "mu_ASV")
+        self.add_trainable(mu_lvA, "mu_lvA")
+        self.add_trainable(nab, "nab")
+        self.add_trainable(nbd, "nbd")
+        self.add_trainable(nce, "nce")
+        self.add_trainable(nda, "nda")
+        self.add_trainable(nfe, "nfe")
+        self.add_trainable(neb, "neb")
+        self.add_trainable(nee, "nee")
+        self.masked = masked
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        p1, p2 = pinn.gradients(x, outputs)
+        if self.masked is None:
+            outputs = pinn.net(x)
+            p1, p2 = pinn.gradients(x, outputs)
+        else:
+            x_v = x[:, 0:3]
+            mask = x[:, 3]
+            outputs = pinn.net(x_v)
+            p1, p2 = pinn.gradients(x_v, outputs)
 
         A = outputs[:, 0]
         B = outputs[:, 1]
@@ -480,35 +456,45 @@ class Circuit2_variant5716(PDE_Residual):
         V_D = self.V_D.get_value(x)
         V_E = self.V_E.get_value(x)
         V_F = self.V_F.get_value(x)
-        k_AA = self.k_AA.get_value(x)
+        k_AB = self.k_AB.get_value(x)
         k_BD = self.k_BD.get_value(x)
         k_CE = self.k_CE.get_value(x)
         k_DA = self.k_DA.get_value(x)
         k_EB = self.k_EB.get_value(x)
         k_EE = self.k_EE.get_value(x)
         k_FE = self.k_FE.get_value(x)
-        mu_A = self.mu_A.get_value(x)
-        mulv_A = self.mulv_A.get_value(x)
+        mu_ASV = self.mu_ASV.get_value(x)
+        mu_lvA = self.mu_lvA.get_value(x)
+        nab = self.nab.get_value(x)
+        nbd = self.nbd.get_value(x)
+        nce = self.nce.get_value(x)
+        nda = self.nda.get_value(x)
+        nfe = self.nfe.get_value(x)
+        neb = self.neb.get_value(x)
+        nee = self.nee.get_value(x)
 
-        def noncompetitiveact(U, km, n=2):
-            act = ((U / (km + 1e-20)) ** (n)) / (1 + (U / (km + 1e-20)) ** (n))
+        def activate(x, km, n=2):
+            # ex = (km / (x + 1e-20)) ** (n)
+            # tf.math.is_inf(ex)
+            act = 1 / (1 + (km / (x + 1e-20)) ** (n))
             return act
 
-        def noncompetitiveinh(U, km, n=2):
-            inh = 1 / (1 + (U / (km + 1e-20)) ** (n))
+        def inhibit(x, km, n=2):
+            inh = 1 / (1 + (x / (km + 1e-20)) ** (n))
             return inh
 
-        f_A = A_t - D_A * (A_xx + A_yy) - b_A - V_A * noncompetitiveinh(D, k_DA) + mu_A * A
-        f_B = B_t - D_B * (B_xx + B_yy) - b_B - V_B * noncompetitiveact(A, k_AA) * noncompetitiveinh(E, k_EB) + mu_A * B
-        f_C = C_t - b_C - V_C * noncompetitiveinh(D, k_DA) + mulv_A * C
-        f_D = D_t - b_D - V_D * noncompetitiveact(B, k_BD) + mulv_A * D
-        f_E = (
-            E_t
-            - b_E
-            - V_E * noncompetitiveinh(C, k_CE) * noncompetitiveinh(F, k_FE) * noncompetitiveact(E, k_EE)
-            + mulv_A * E
-        )
-        f_F = F_t - b_F - V_F * noncompetitiveact(B, k_BD) + mulv_A * F
+        f_A = A_t - b_A - V_A * inhibit(D, k_DA, nda) + mu_ASV * A - D_A * (A_xx + A_yy)
+        f_B = B_t - b_B - V_B * activate(A, k_AB, nab) * inhibit(E, k_EB, neb) + mu_ASV * B - D_B * (B_xx + B_yy)
+        f_C = C_t - b_C - V_C * inhibit(D, k_DA, nda) + mu_lvA * C
+        f_D = D_t - b_D - V_D * activate(B, k_BD, nbd) + mu_lvA * D
+        f_E = E_t - b_E - V_E * inhibit(C, k_CE, nce) * inhibit(F, k_FE, nfe) * activate(E, k_EE, nee) + mu_lvA * E
+        f_F = F_t - b_F - V_F * activate(B, k_BD, nbd) + mu_lvA * F
+
+        if self.masked:
+            f_C *= mask
+            f_D *= mask
+            f_E *= mask
+            f_F *= mask
 
         return outputs, f_A, f_B, f_C, f_D, f_E, f_F
 
@@ -654,7 +640,7 @@ class Circuit3954(PDE_Residual):
         return outputs, f_U, f_V, f_A, f_B, f_C, f_D, f_E, f_F, f_Atc
 
 
-class ASDM_steady(ASDM):
+class Koch_Meinhard_steady(Koch_Meinhard):
     def __init__(
         self,
         D_u: PDE_Parameter,

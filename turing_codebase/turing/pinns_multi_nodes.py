@@ -1,13 +1,19 @@
 from re import A
 import time
+import pathlib
+import pickle
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-from .utils import indices
+from .utils import indices, TINN_Dataset
 from .pinns import NN, PDE_Residual, Loss
 
 
-class TINN_multi_nodes:
+def default_printer2(s):
+    print(s)
+
+
+class TINN_multi_nodes(tf.Module):
     """Turing-Informed Neural Net"""
 
     def __init__(
@@ -19,13 +25,15 @@ class TINN_multi_nodes:
         nodes_n=2,
         node_names=None,
         optimizer=keras.optimizers.Adam(),
-        train_acc_metric=keras.metrics.MeanSquaredError(),
+        # train_acc_metric=keras.metrics.MeanSquaredError(),
         alpha=0.5,
         loss_penalty_power=1,
         print_precision=".5f",
         lambdas_pre=None,
         log_loss=False,
+        **kwargs,
     ):
+        super().__init__(**kwargs)
         self.pinn = pinn
         self.loss = loss
         self.extra_loss = extra_loss
@@ -39,7 +47,7 @@ class TINN_multi_nodes:
             self.node_names = node_names
 
         self.optimizer = optimizer
-        self.train_acc_metric = train_acc_metric
+        # self.train_acc_metric = train_acc_metric
         self.alpha = tf.Variable(alpha, dtype=pinn.dtype, trainable=False)
         self.loss_penalty_power = tf.Variable(loss_penalty_power, dtype=pinn.dtype, trainable=False)
         self.print_precision = print_precision
@@ -55,7 +63,7 @@ class TINN_multi_nodes:
         self.grad_norms = [tf.Variable(0.0, dtype=pinn.dtype, trainable=False) for i in range(nodes_n * 2)]
 
         self.loss_norms = [tf.Variable(0.0, dtype=pinn.dtype, trainable=False) for i in range(nodes_n * 2)]
-
+        self.__version__ = 0.1
         self._reset_losses_()
 
     def _reset_losses_(self):
@@ -67,9 +75,10 @@ class TINN_multi_nodes:
         self.train_acc = 0
 
     @tf.function
-    def __train_step__(self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step):
+    def __train_step__(
+        self, x_obs, y_obs, x_pde, update_lambdas, first_step, last_step, train_acc_metric, dummy_train=False
+    ):
         with tf.GradientTape(persistent=False) as tape:
-
             if x_pde is None:
                 outputs, f_pde = self.pde_residual.residual_multi_nodes(self.pinn, x_obs)
             else:
@@ -100,9 +109,23 @@ class TINN_multi_nodes:
             self._update_lambdas_(x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables)
 
         grads = tape.gradient(loss_value, trainables)
-        self.optimizer.apply_gradients(zip(grads, trainables))
-        self.train_acc_metric.update_state(y_obs, outputs)
+        #
+        if dummy_train:
+            self.dummy_update_grads(trainables)
+        else:
+            self.optimizer.apply_gradients(zip(grads, trainables))
+            train_acc_metric.update_state(y_obs, outputs)
         return loss_value, loss_obs, loss_pde, loss_extra_items
+
+    def dummy_update_grads(self, trainables):
+        # dummy zero gradients
+        zero_grads = [tf.zeros_like(w) for w in trainables]
+        # save current state of variables
+        saved_vars = [tf.identity(w) for w in trainables]
+        # Apply gradients which don't do nothing
+        self.optimizer.apply_gradients(zip(zero_grads, trainables))
+        # Reload variables
+        [x.assign(y) for x, y in zip(trainables, saved_vars)]
 
     def _update_lambdas_(self, x_pde, first_step, last_step, loss_obs, loss_pde, loss_items, trainables):
         if x_pde is None:
@@ -141,6 +164,107 @@ class TINN_multi_nodes:
                 )
 
     def train(
+        self,
+        epochs,
+        batch_size,
+        dataset: TINN_Dataset,
+        print_interval=10,
+        stop_threshold=0,
+        sample_losses=True,
+        sample_parameters=True,
+        sample_regularisations=True,
+        sample_gradients=False,
+        regularise=True,
+        regularise_interval=1,
+        train_acc_metric=keras.metrics.MeanSquaredError(),
+        printer=default_printer2,
+        epoch_callback=None,
+    ):
+
+        # Samplling arrays
+        samples = self._create_samples_(
+            epochs, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+        )
+        # For first epoch, we store the number of steps to compelete a full epoch
+        last_step = -1
+        start_time = time.time()
+        #
+        x_size = dataset.x_size
+        x_pde_size = dataset.x_pde_size
+        #
+        dataset2 = dataset.cache().batch(batch_size)
+        for epoch in range(epochs):
+            if epoch % print_interval == 0:
+                printer(f"\nStart of epoch {epoch:d}")
+            step = 0
+            # Iterate over the batches of the dataset.
+            for element in dataset2:
+                if dataset.has_x_pde:
+                    x_batch_train, y_batch_train, p_batch_train = element
+                else:
+                    x_batch_train, y_batch_train = element
+                    p_batch_train = None
+
+                (loss_value_batch, loss_obs_batch, loss_pde_batch, loss_extra_batch) = self.__train_step__(
+                    x_batch_train,
+                    y_batch_train,
+                    p_batch_train,
+                    regularise and epoch % regularise_interval == 0,
+                    step == 0,
+                    step == last_step,
+                    train_acc_metric,
+                )
+
+                if step > last_step:
+                    last_step = step
+                # add the batch loss: Note that the weights are calculated based on the batch size
+                #                     especifically, the last batch can have a different size
+                current_batch_size = x_batch_train.shape[0]
+                current_pde_batch_size = current_batch_size if dataset.has_x_pde else p_batch_train.shape[0]
+                w_obs = current_batch_size / x_size
+                w_pde = current_pde_batch_size / x_pde_size
+
+                self.loss_reg_total += loss_value_batch.numpy()
+                self.loss_obs += loss_obs_batch.numpy() * w_obs
+                self.loss_pde += loss_pde_batch.numpy() * w_pde
+                total_loss_extra_batch = np.sum([item.numpy() for item in loss_extra_batch])
+                self.loss_extra += total_loss_extra_batch * w_obs
+                self.loss_total += (
+                    np.sum(loss_obs_batch.numpy() * w_obs)
+                    + np.sum(loss_pde_batch.numpy() * w_pde)
+                    + total_loss_extra_batch * w_obs
+                )
+            # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
+            self.train_acc = train_acc_metric.result()
+            # if isinstance(train_acc_metric, keras.metrics.MeanSquaredError):
+            #    self.train_acc = np.sqrt(self.train_acc)
+            # self.loss_total = np.sqrt(self.loss_total)
+            # self.loss_obs = np.sqrt(self.loss_obs)
+            # self.loss_pde = np.sqrt(self.loss_pde)
+            self._store_samples_(
+                samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
+            )
+            if epoch_callback is not None:
+                epoch_callback(epoch, samples, self)
+            # Display metrics at the end of each epoch.
+            if epoch % print_interval == 0:
+                self._print_metrics_(printer)
+            if stop_threshold >= float(self.train_acc):
+                printer("############################################")
+                printer("#               Early stop                 #")
+                printer("############################################")
+                return samples
+            # Reset training metrics at the end of each epoch
+            train_acc_metric.reset_states()
+            self._reset_losses_()
+            if epoch % print_interval == 0:
+                printer(f"Time taken: {(time.time() - start_time):.2f}s")
+                start_time = time.time()
+            # end for epoch in range(epochs)
+
+        return samples
+
+    def train2(
         self,
         epochs,
         batch_size,
@@ -296,26 +420,72 @@ class TINN_multi_nodes:
             for param in self.pde_residual.trainables():
                 samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
-    def _print_metrics_(self):
-        print(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
-        print(
+    def _print_metrics_(self, printer):
+        printer(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
+        printer(
             f"total loss: {self.loss_total:{self.print_precision}}, "
             f"total regularisd loss (sum of batches): {self.loss_reg_total:{self.print_precision}}"
         )
         for i, name in enumerate(self.node_names):
-            print(
+            printer(
                 f"obs {name} loss: {self.loss_obs[i]:{self.print_precision}}, "
                 f"pde {name} loss: {self.loss_pde[i]:{self.print_precision}}"
             )
         last_lambda_obs = np.array([item.numpy() for item in self.lambdas[: self.nodes_n]])
         last_lambda_pde = np.array([item.numpy() for item in self.lambdas[self.nodes_n :]])
         for i, name in enumerate(self.node_names):
-            print(
+            printer(
                 f"lambda obs {name}: {last_lambda_obs[i]:{self.print_precision}}, "
                 f"lambda pde {name}: {last_lambda_pde[i]:{self.print_precision}}"
             )
 
-        print(self.pde_residual.trainables_str())
+        printer(self.pde_residual.trainables_str())
         if self.extra_loss_len > 0:
             for i, loss in enumerate(self.extra_loss):
-                print(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")
+                printer(f"extra loss {loss.name}: {self.loss_extra[i]:{self.print_precision}}")
+
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+
+        # save optimizer state
+        weight_values = self.optimizer.get_weights()  # tf.keras.backend.batch_get_value(symbolic_weights)
+        with open(f"{str(path)}_optimizer.pkl", "wb") as f:
+            pickle.dump(weight_values, f)
+        # remove optimiser
+        opt = self.optimizer
+        # self.optimizer = None
+        delattr(self, "optimizer")
+        with open(f"{str(path)}.pkl", "wb") as f:
+            pickle.dump(self, f)
+        # Restore optimizer
+        # self.optimizer = opt
+        setattr(self, "optimizer", opt)
+
+        # save optimizer config
+        conf = self.optimizer.get_config()
+        with open(f"{str(path)}_optimizer_config.pkl", "wb") as f:
+            pickle.dump(conf, f)
+
+    @classmethod
+    def restore(cls, path_dir, name, ds):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}.pkl", "rb") as f:
+            model = pickle.load(f)
+        with open(f"{str(path)}_optimizer.pkl", "rb") as f:
+            weight_values = pickle.load(f)
+        with open(f"{str(path)}_optimizer_config.pkl", "rb") as f:
+            conf = pickle.load(f)
+
+        model.optimizer = keras.optimizers.Adam(learning_rate=5e-4).from_config(conf)
+        obs = next(iter(ds.batch(2).take(1)))
+        if len(obs) == 2:
+            X, Y = obs
+            x_pde = None
+        else:
+            X, Y, x_pde = obs
+        model.__train_step__(X, Y, x_pde, False, False, False, None, dummy_train=True)
+
+        # Set the weights of the optimizer
+        model.optimizer.set_weights(weight_values)
+        return model

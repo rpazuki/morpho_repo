@@ -27,6 +27,7 @@ class NN(tf.Module):
         self.lb = lb
         self.ub = ub
         self.dtype = dtype
+        self.__version__ = 0.1
         self.build()
 
     def build(self):
@@ -146,6 +147,30 @@ class NN(tf.Module):
         return model
 
 
+class Res_NN(NN):
+    def __init__(self, layers, lb, ub, dtype=tf.float32, **kwargs):
+        super().__init__(layers, lb, ub, dtype, **kwargs)
+
+    @tf.function
+    def net(self, inputs):
+        # Map the inputs to the range [-1, 1]
+        H = 2.0 * (inputs - self.lb) / (self.ub - self.lb) - 1.0
+        H_sum = None
+        for i, (W, b) in enumerate(zip(self.Ws[:-1], self.bs[:-1])):
+            H = tf.tanh(tf.add(tf.matmul(H, W), b))
+            if i % 2 == 0 and i != 0:
+                if H_sum is None:
+                    H_sum = H
+                else:
+                    H += H_sum
+                    H_sum = H
+
+        W = self.Ws[-1]
+        b = self.bs[-1]
+        outputs = tf.add(tf.matmul(H, W), b)
+        return outputs
+
+
 class PDE_Residual(tf.Module):
     def __init__(self, name, print_precision=".5f", **kwargs):
         """Loss value that is calulated for the output of the pinn
@@ -158,6 +183,7 @@ class PDE_Residual(tf.Module):
         super().__init__(name=name, **kwargs)
         self.print_precision = print_precision
         self._trainables_ = ()
+        self.__version__ = 0.1
 
     def add_trainable(self, param, param_name):
         setattr(self, param_name, param.build())
@@ -258,14 +284,15 @@ class PDE_Residual(tf.Module):
 class Loss:
     def __init__(self, *childs):
         self.childs = childs
+        self.__version__ = 0.1
 
     def norm(self, x, axis=None):
         if self.childs is None:
             return 0
         else:
-            ret = self.childs[0].norm(x)
+            ret = self.childs[0].norm(x, axis)
             for c in self.childs[1:]:
-                ret += self.childs[0].norm(x)
+                ret += self.childs[0].norm(x, axis)
         return ret
 
     def __add__(self, left):
@@ -315,6 +342,8 @@ class TINN(tf.Module):
         self.loss_norm_obs_v = tf.Variable(0.0, dtype=pinn.dtype, trainable=False)
         self.loss_norm_pde_u = tf.Variable(0.0, dtype=pinn.dtype, trainable=False)
         self.loss_norm_pde_v = tf.Variable(0.0, dtype=pinn.dtype, trainable=False)
+
+        self.__version__ = 0.1
 
         self._reset_losses_()
 
@@ -400,11 +429,11 @@ class TINN(tf.Module):
             zero_grads_params = [tf.zeros_like(w) for w in self.non_zero_loss.parameters]
             # save current state of variables
             saved_vars_params = [tf.identity(w) for w in self.non_zero_loss.parameters]
-            # Apply gradients which don't do nothing
+        # Apply gradients which don't do nothing
         self.optimizer.apply_gradients(zip(zero_grads, trainables))
         if self.non_zero_loss is not None:
             self.optimizer.apply_gradients(zip(zero_grads_params, self.non_zero_loss.parameters))
-            # Reload variables
+        # Reload variables
         [x.assign(y) for x, y in zip(trainables, saved_vars)]
         if self.non_zero_loss is not None:
             [x.assign(y) for x, y in zip(self.non_zero_loss.parameters, saved_vars_params)]
@@ -479,6 +508,7 @@ class TINN(tf.Module):
         regularise_interval=1,
         train_acc_metric=keras.metrics.MeanSquaredError(),
         printer=default_printer,
+        epoch_callback=None,
     ):
 
         # Samplling arrays
@@ -494,13 +524,6 @@ class TINN(tf.Module):
         x_pde_size = dataset.x_pde_size
         #
         dataset2 = dataset.cache().batch(batch_size)
-        # if X_pde is None:
-        # X_pde_i = X_pde[indeces_list]
-        # dataset2 = tf.data.Dataset.from_tensor_slices(X_pde_i)
-        # if self.weight_values is not None:
-        #    self.optimizer.set_weights(self.weight_values)
-        #    self.weight_values = None
-
         for epoch in range(epochs):
             if epoch % print_interval == 0:
                 printer(f"\nStart of epoch {epoch:d}")
@@ -508,11 +531,11 @@ class TINN(tf.Module):
             step = 0
             # Iterate over the batches of the dataset.
             for element in dataset2:
-                if len(element) == 2:
+                if dataset.has_x_pde:
+                    x_batch_train, y_batch_train, p_batch_train = element
+                else:
                     x_batch_train, y_batch_train = element
                     p_batch_train = None
-                else:
-                    x_batch_train, y_batch_train, p_batch_train = element
 
                 (
                     loss_value_batch,
@@ -537,7 +560,7 @@ class TINN(tf.Module):
                 # add the batch loss: Note that the weights are calculated based on the batch size
                 #                     especifically, the last batch can have a different size
                 current_batch_size = x_batch_train.shape[0]
-                current_pde_batch_size = current_batch_size if p_batch_train is None else p_batch_train.shape[0]
+                current_pde_batch_size = p_batch_train.shape[0] if dataset.has_x_pde else current_batch_size
                 w_obs = current_batch_size / x_size
                 w_pde = current_pde_batch_size / x_pde_size  # if p_batch_train is None else batch_size / x2_size
 
@@ -564,6 +587,8 @@ class TINN(tf.Module):
             self._store_samples_(
                 samples, epoch, sample_losses, sample_regularisations, sample_gradients, sample_parameters
             )
+            if epoch_callback is not None:
+                epoch_callback(epoch, samples, self)
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_(printer)

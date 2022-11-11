@@ -1,11 +1,79 @@
 import os
+from enum import Enum
 from itertools import cycle, zip_longest
 import pathlib
 from collections import namedtuple
 import warnings
 import pickle
+from collections.abc import Iterable
 import numpy as np
+from scipy.optimize import minimize
 import tensorflow as tf
+
+
+def clip_by_value(z):
+    return tf.clip_by_value(z, 1e-6, 1e10)
+
+
+def clip_by_value_zero_lb(z):
+    return tf.clip_by_value(z, 0, 1e10)
+
+
+class Parameter_Type(Enum):
+    CONSTANT = 1
+    VARIABLE = 2
+    INPUT = 3
+
+
+class PDE_Parameter:
+    def __init__(self, name, parameter_type: Parameter_Type, value=1.0, index=-1, dtype=tf.float32, zero_lb=False):
+        self.name = name
+        self.parameter_type = parameter_type
+        self.dtype = dtype
+        self.value = value
+        self.index = index
+        self.zero_lb = zero_lb
+        self.trainable = ()
+
+    def build(self):
+        if self.parameter_type == Parameter_Type.CONSTANT:
+            self.tf_var = tf.constant(self.value, dtype=self.dtype, name=self.name)
+        elif self.parameter_type == Parameter_Type.VARIABLE:
+            if self.zero_lb:
+                self.tf_var = tf.Variable(
+                    [self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value_zero_lb
+                )
+            else:
+                self.tf_var = tf.Variable([self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value)
+            self.trainable = (self.tf_var,)
+        else:  # INPUT
+            self.tf_var = None
+
+        return self
+
+    def get_value(self, input):
+        if self.parameter_type == Parameter_Type.CONSTANT:
+            return self.tf_var
+        elif self.parameter_type == Parameter_Type.VARIABLE:
+            return self.tf_var
+        else:  # INPUT, self.index + 3 starts after (x, y, t)
+            return input[:, self.index + 3]
+
+    def set_value(self, value):
+        if self.parameter_type == Parameter_Type.CONSTANT:
+            self.value = value
+            try:
+                self.tf_var.assign(value)
+            except AttributeError:
+                self.tf_var = tf.constant(self.value, dtype=self.dtype, name=self.name)
+        elif self.parameter_type == Parameter_Type.VARIABLE:
+            self.value = value
+            try:
+                self.tf_var[0].assign(value)
+            except AttributeError:
+                self.tf_var = tf.Variable([self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value)
+        # else:  do nothing
+
 
 Simulation = namedtuple(
     "Simulation",
@@ -410,6 +478,24 @@ class TINN_Multiple_Sim_Dataset(TINN_Dataset):
 
         setattr(ds, "cache", overide_cache)
         return ds
+
+
+def minimize_parameters(pde_loss, pinn, inputs, parameters, norm=lambda x: np.sum(x**2), tol=1e-7, **kwargs):
+
+    # key_vals = [(v, v.tf_var.numpy()) for _, v in pde_loss.__dict__.items() if isinstance(v, PDE_Parameter)]
+    key_vals = [(v, v.tf_var.numpy()) for v in parameters]
+    initial_parameters = [(pde_param, v[0] if isinstance(v, Iterable) else v) for pde_param, v in key_vals]
+    pde_params = [key for key, _ in initial_parameters]
+    initial_tuple = tuple([v for _, v in initial_parameters])
+
+    def minimize_model_parameters(args):
+        for pde_param, value in zip(pde_params, args):
+            pde_param.set_value(value)
+
+        _, test_pde_u, test_pde_v = pde_loss.residual(pinn, inputs)
+        return norm(test_pde_u) + norm(test_pde_v)
+
+    return minimize(minimize_model_parameters, initial_tuple, method="Powell", tol=tol, **kwargs)
 
 
 def lower_upper_bounds(inputs_of_inputs):
