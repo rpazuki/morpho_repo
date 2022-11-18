@@ -3,30 +3,148 @@ from tensorflow import keras
 import numpy as np
 from .utils import Parameter_Type
 from .utils import PDE_Parameter
-from . import PDE_Residual
-from .utils import clip_by_value, clip_by_value_zero_lb
 from . import Loss
+from .utils import clip_by_value, clip_by_value_zero_lb
+from . import Norm
 
 
-class L2(Loss):
+class L2(Norm):
     def __init__(self):
         super().__init__(None)
 
-    def norm(self, x, axis=None):
-        return tf.reduce_mean(tf.square(x), axis=axis)
+    def reduce_norm(self, tupled_x, axis=None):
+        # All loss object return their tensor as
+        # Rank one or more tuples
+        return tf.stack([tf.reduce_mean(tf.square(item), axis=axis) for item in tupled_x], axis=0)
 
 
-class L_Inf(Loss):
+class L_Inf(Norm):
     def __init__(self):
         super().__init__(None)
 
-    def norm(self, x, axis=None):
-        return tf.reduce_max(tf.abs(x), axis=axis)
+    def reduce_norm(self, tupled_x, axis=None):
+        # All loss object return their tensor as
+        # Rank one or more tuple, so, we loop over them
+        # to get the norms
+        return tf.stack([tf.reduce_max(tf.abs(item), axis=axis) for item in tupled_x], axis=0)
 
 
-class Non_zero_params(PDE_Residual):
-    def __init__(self, loss_name, parameters, epsilon=1e-7, alpha=1, print_precision=".5f", **kwargs):
-        super().__init__(name=f"non_zero_{loss_name}", print_precision=print_precision, **kwargs)
+class Observation_Loss(Loss):
+    def __init__(self, regularise=True, input_dim: int = 3, print_precision=".5f", **kwargs):
+        super().__init__(
+            name="Observation_Loss",
+            regularise=regularise,
+            residual_ret_num=2,
+            print_precision=print_precision,
+            **kwargs,
+        )
+        self.input_dim = input_dim
+
+    @tf.function
+    def residual(self, pinn, x):
+        output = pinn.net(x[:, : self.input_dim])
+        y = x[:, self.input_dim :]
+        diff = output - y
+        return (diff[:, 0], diff[:, 1])
+
+
+class Periodic_Boundary_Condition(Loss):
+    def __init__(
+        self,
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """ """
+
+        super().__init__(
+            name="Periodic_Boundary_Condition",
+            regularise=regularise,
+            residual_ret_num=1,
+            print_precision=print_precision,
+        )
+
+    @tf.function
+    def residual(self, pinn, x):
+        y1 = pinn.net(x[:, :3])
+        y2 = pinn.net(x[:, 3:])
+        return (y1 - y2,)
+
+
+class Diffusion_point_Loss(Loss):
+    def __init__(
+        self,
+        Ds,
+        dtype,
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """ """
+
+        super().__init__(
+            name="Diffusion_Loss", regularise=regularise, residual_ret_num=1, print_precision=print_precision
+        )
+        self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
+
+    @tf.function
+    def residual(self, pinn, x):
+        x_center = x[:, :3]
+        (_, _, _, u_xx, u_yy, _, _, v_xx, v_yy) = self.derivatives(pinn, x_center)
+
+        diff_u = self.Ds[0] * (u_xx + u_yy)
+        diff_v = self.Ds[1] * (v_xx + v_yy)
+        obs_diff = x[:, 3:]
+        # scale the observation by the grid step size
+        # Note that the PINN's diffusion is scaled on differentiation time
+        # diff_u_v = tf.stack([diff_u, diff_v], axis=1) - obs_diff * self.dxdy
+        # scale both by diffusion constants
+        # diff_u_v = tf.stack([diff_u_v[:, i] * self.Ds[i] for i in range(diff_u_v.shape[1])], axis=1)
+        diff_u_v = tf.stack([diff_u, diff_v], axis=1) - obs_diff
+        return (diff_u_v,)
+
+
+class Diffusion_Loss(Loss):
+    def __init__(
+        self,
+        ns,
+        Ls,
+        Ds,
+        dtype,
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """ """
+
+        super().__init__(
+            name="Diffusion_Loss", regularise=regularise, residual_ret_num=1, print_precision=print_precision
+        )
+        self.dxdy = tf.constant(np.prod([ns[i] / Ls[i] for i in range(len(ns))]), dtype=dtype)
+        self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
+
+    @tf.function
+    def residual(self, pinn, x):
+        x_center = pinn.net(x[:, :3])
+        x_left = pinn.net(tf.concat([x[:, 3:4], x[:, 1:3]], axis=1))
+        x_right = pinn.net(tf.concat([x[:, 4:5], x[:, 1:3]], axis=1))
+        y_up = pinn.net(tf.concat([x[:, 0:1], x[:, 5:6], x[:, 2:3]], axis=1))
+        y_bottom = pinn.net(tf.concat([x[:, 0:1], x[:, 6:7], x[:, 2:3]], axis=1))
+
+        pinn_diff = self.dxdy * (x_left + x_right + y_up + y_bottom - 4.0 * x_center)
+        pinn_diff = tf.stack([pinn_diff[:, i] * self.Ds[i] for i in range(pinn_diff.shape[1])], axis=1)
+
+        obs_diff = x[:, 7:]
+        diff_u_v = pinn_diff - obs_diff
+        return (diff_u_v,)
+
+
+class Non_zero_params(Loss):
+    def __init__(self, loss_name, parameters, regularise=False, epsilon=1e-7, alpha=1, print_precision=".5f", **kwargs):
+        super().__init__(
+            name=f"non_zero_{loss_name}",
+            regularise=regularise,
+            residual_ret_num=len(parameters),
+            print_precision=print_precision,
+            **kwargs,
+        )
         """ Create a loss object that keeps the parameters from their lower bound.
 
             It use the function f(x) = epsilon/x^alpha to control the loss and its
@@ -54,11 +172,11 @@ class Non_zero_params(PDE_Residual):
             # the small number epsilon*1e-3 prevents division by zero
             return self.epsilon / (x + self.epsilon * 1e-3) ** self.alpha
 
-        params = tf.stack(self.parameters)
-        return tf.reduce_sum(f(params))
+        # params = tf.stack(self.parameters)
+        return tuple([f(p) for p in self.parameters])
 
 
-class Koch_Meinhard(PDE_Residual):
+class Koch_Meinhard(Loss):
     def __init__(
         self,
         D_u: PDE_Parameter,
@@ -71,6 +189,7 @@ class Koch_Meinhard(PDE_Residual):
         kappa_u: PDE_Parameter,
         alpha_u=1.0,
         alpha_v=1.0,
+        regularise=True,
         print_precision=".5f",
     ):
         """Koch_Meinhard PDE loss
@@ -80,7 +199,9 @@ class Koch_Meinhard(PDE_Residual):
         alpha_u and alpha_v are scales that we use to normalise the u and v.
         """
 
-        super().__init__(name="Loss_Koch_Meinhard", print_precision=print_precision)
+        super().__init__(
+            name="Loss_Koch_Meinhard", regularise=regularise, residual_ret_num=2, print_precision=print_precision
+        )
 
         self._trainables_ = ()
 
@@ -106,25 +227,8 @@ class Koch_Meinhard(PDE_Residual):
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        p1, p2 = pinn.gradients(x, outputs)
 
-        u = outputs[:, 0]
-        v = outputs[:, 1]
-
-        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        u_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        v_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        (y, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -139,10 +243,10 @@ class Koch_Meinhard(PDE_Residual):
         f_u = u_t - D_u * (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
         f_v = v_t - D_v * (v_xx + v_yy) + rho_v * f - sigma_v
 
-        return outputs, f_u, f_v
+        return (f_u, f_v)
 
 
-class Schnakenberg(PDE_Residual):
+class Schnakenberg(Loss):
     def __init__(
         self,
         D_u: PDE_Parameter,
@@ -151,9 +255,12 @@ class Schnakenberg(PDE_Residual):
         c_1: PDE_Parameter,
         c_2: PDE_Parameter,
         c_3: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(name="Loss_Schnakenberg", print_precision=print_precision)
+        super().__init__(
+            name="Loss_Schnakenberg", regularise=regularise, residual_ret_num=2, print_precision=print_precision
+        )
 
         self._trainables_ = ()
         self.D_u = D_u.build()
@@ -171,25 +278,7 @@ class Schnakenberg(PDE_Residual):
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        p1, p2 = pinn.gradients(x, outputs)
-
-        u = outputs[:, 0]
-        v = outputs[:, 1]
-
-        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        u_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        v_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        (y, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -202,10 +291,10 @@ class Schnakenberg(PDE_Residual):
         f_u = u_t - D_u * (u_xx + u_yy) - c_1 + c_0 * u - c_3 * u2v
         f_v = v_t - D_v * (v_xx + v_yy) - c_2 + c_3 * u2v
 
-        return outputs, f_u, f_v
+        return (f_u, f_v)
 
 
-class FitzHugh_Nagumo(PDE_Residual):
+class FitzHugh_Nagumo(Loss):
     def __init__(
         self,
         D_u: PDE_Parameter,
@@ -214,9 +303,12 @@ class FitzHugh_Nagumo(PDE_Residual):
         gamma: PDE_Parameter,
         mu: PDE_Parameter,
         sigma: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(name="FitzHugh_Nagumo", print_precision=print_precision)
+        super().__init__(
+            name="FitzHugh_Nagumo", regularise=regularise, residual_ret_num=2, print_precision=print_precision
+        )
 
         self._trainables_ = ()
 
@@ -235,25 +327,7 @@ class FitzHugh_Nagumo(PDE_Residual):
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        p1, p2 = pinn.gradients(x, outputs)
-
-        u = outputs[:, 0]
-        v = outputs[:, 1]
-
-        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        u_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        v_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        (y, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -265,21 +339,22 @@ class FitzHugh_Nagumo(PDE_Residual):
         f_u = u_t - D_u * (u_xx + u_yy) - mu * u + u * u * u + v - sigma
         f_v = v_t - D_v * (v_xx + v_yy) - b * u + gamma * v
 
-        return outputs, f_u, f_v
+        return (f_u, f_v)
 
 
 #   The following are wrapper classes to turn the usual losses
 #   to steady version (i.e. no time, or just one snapshot)
-class Brusselator(PDE_Residual):
+class Brusselator(Loss):
     def __init__(
         self,
         D_u: PDE_Parameter,
         D_v: PDE_Parameter,
         A: PDE_Parameter,
         B: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(name="Brusselator", print_precision=print_precision)
+        super().__init__(name="Brusselator", regularise=regularise, residual_ret_num=2, print_precision=print_precision)
 
         self._trainables_ = ()
         #
@@ -294,25 +369,7 @@ class Brusselator(PDE_Residual):
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        p1, p2 = pinn.gradients(x, outputs)
-
-        u = outputs[:, 0]
-        v = outputs[:, 1]
-
-        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        u_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        v_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        (y, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -324,10 +381,10 @@ class Brusselator(PDE_Residual):
         f_u = u_t - D_u * (u_xx + u_yy) - A + (B + 1) * u - u2v
         f_v = v_t - D_v * (v_xx + v_yy) - B * u + u2v
 
-        return outputs, f_u, f_v
+        return (f_u, f_v)
 
 
-class Circuit2_variant5716(PDE_Residual):
+class Circuit2_variant5716(Loss):
     def __init__(
         self,
         D_A: PDE_Parameter,
@@ -360,10 +417,13 @@ class Circuit2_variant5716(PDE_Residual):
         nfe: PDE_Parameter,
         neb: PDE_Parameter,
         nee: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
         masked=False,
     ):
-        super().__init__(name="Circuit2_variant5716", print_precision=print_precision)
+        super().__init__(
+            name="Circuit2_variant5716", regularise=regularise, residual_ret_num=6, print_precision=print_precision
+        )
 
         self._trainables_ = ()
 
@@ -402,45 +462,17 @@ class Circuit2_variant5716(PDE_Residual):
     @tf.function
     def residual(self, pinn, x):
         if self.masked is None:
-            outputs = pinn.net(x)
-            p1, p2 = pinn.gradients(x, outputs)
+            # outputs = pinn.net(x)
+            # p1, p2 = pinn.gradients(x, outputs)
+            x_v = x
         else:
             x_v = x[:, 0:3]
             mask = x[:, 3]
-            outputs = pinn.net(x_v)
-            p1, p2 = pinn.gradients(x_v, outputs)
-
-        A = outputs[:, 0]
-        B = outputs[:, 1]
-        C = outputs[:, 2]
-        D = outputs[:, 3]
-        E = outputs[:, 4]
-        F = outputs[:, 5]
-
-        # p1 = [tf.gradients(outputs[:, i], x)[0] for i in range(outputs.shape[1])]
-
-        # A_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # A_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        A_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        # A_xx = tf.cast(tf.gradients(A_x, x)[0][:, 0], pinn.dtype)
-        # A_yy = tf.cast(tf.gradients(A_y, x)[0][:, 1], pinn.dtype)
-        A_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        A_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # B_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # B_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        B_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        # B_xx = tf.cast(tf.gradients(B_x, x)[0][:, 0], pinn.dtype)
-        # B_yy = tf.cast(tf.gradients(B_y, x)[0][:, 1], pinn.dtype)
-        B_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        B_yy = tf.cast(p2[1][:, 1], pinn.dtype)
-
-        C_t = tf.cast(p1[2][:, 2], pinn.dtype)
-        D_t = tf.cast(p1[3][:, 2], pinn.dtype)
-        E_t = tf.cast(p1[4][:, 2], pinn.dtype)
-        F_t = tf.cast(p1[5][:, 2], pinn.dtype)
+            # outputs = pinn.net(x_v)
+            # p1, p2 = pinn.gradients(x_v, outputs)
+        (y, A, B, C, D, E, F, A_t, B_t, C_t, D_t, E_t, F_t, A_xx, B_xx, A_yy, B_yy) = self.derivatives_multi_nodes(
+            pinn, x_v
+        )
 
         D_A = self.D_A.get_value(x)
         D_B = self.D_B.get_value(x)
@@ -496,10 +528,10 @@ class Circuit2_variant5716(PDE_Residual):
             f_E *= mask
             f_F *= mask
 
-        return outputs, f_A, f_B, f_C, f_D, f_E, f_F
+        return (f_A, f_B, f_C, f_D, f_E, f_F)
 
 
-class Circuit3954(PDE_Residual):
+class Circuit3954(Loss):
     def __init__(
         self,
         D: PDE_Parameter,
@@ -527,9 +559,12 @@ class Circuit3954(PDE_Residual):
         K_aTc: PDE_Parameter,
         n: PDE_Parameter,
         n_aTc: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(name="Circuit2_variant5716", print_precision=print_precision)
+        super().__init__(
+            name="Circuit2_variant5716", regularise=regularise, residual_ret_num=9, print_precision=print_precision
+        )
 
         self._trainables_ = ()
 
@@ -562,34 +597,31 @@ class Circuit3954(PDE_Residual):
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        p1, p2 = pinn.gradients(x, outputs)
-
-        U = outputs[:, 0]
-        V = outputs[:, 1]
-        A = outputs[:, 2]
-        B = outputs[:, 3]
-        C = outputs[:, 4]
-        D = outputs[:, 5]
-        E = outputs[:, 6]
-        F = outputs[:, 7]
-        aTc = outputs[:, 8]
-
-        U_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        U_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-        U_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        V_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        V_yy = tf.cast(p2[1][:, 1], pinn.dtype)
-        V_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        A_t = tf.cast(p1[2][:, 2], pinn.dtype)
-        B_t = tf.cast(p1[3][:, 2], pinn.dtype)
-        C_t = tf.cast(p1[4][:, 2], pinn.dtype)
-        D_t = tf.cast(p1[5][:, 2], pinn.dtype)
-        E_t = tf.cast(p1[6][:, 2], pinn.dtype)
-        F_t = tf.cast(p1[7][:, 2], pinn.dtype)
-        aTc_t = tf.cast(p1[9][:, 2], pinn.dtype)
+        (
+            y,
+            U,
+            V,
+            A,
+            B,
+            C,
+            D,
+            E,
+            F,
+            aTc,
+            U_t,
+            V_t,
+            A_t,
+            B_t,
+            C_t,
+            D_t,
+            E_t,
+            F_t,
+            aTc_t,
+            U_xx,
+            V_xx,
+            U_yy,
+            V_yy,
+        ) = self.derivatives_multi_nodes(pinn, x)
 
         D = self.D.get_value(x)
         b_A = self.b_A.get_value(x)
@@ -637,7 +669,7 @@ class Circuit3954(PDE_Residual):
         f_F = -F_t + mu_F * (b_F**2 + b_F * activate(V, K_BD) - F)
         f_Atc = -aTc_t - mu_aTc * aTc
 
-        return outputs, f_U, f_V, f_A, f_B, f_C, f_D, f_E, f_F, f_Atc
+        return (f_U, f_V, f_A, f_B, f_C, f_D, f_E, f_F, f_Atc)
 
 
 class Koch_Meinhard_steady(Koch_Meinhard):
@@ -651,31 +683,16 @@ class Koch_Meinhard_steady(Koch_Meinhard):
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(D_u, D_v, sigma_u, sigma_v, mu_u, rho_u, rho_v, kappa_u, print_precision)
+        regularise = (True,)
+        regularise = (True,)
+        super().__init__(D_u, D_v, sigma_u, sigma_v, mu_u, rho_u, rho_v, kappa_u, regularise, print_precision)
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        _, p2 = pinn.gradients(x, outputs)
-
-        u = outputs[:, 0]
-        v = outputs[:, 1]
-
-        # a_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # a_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        # a_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # s_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # s_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        # s_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        (y, u, _, u_xx, u_yy, v, _, v_xx, v_yy) = self.derivatives(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -690,7 +707,7 @@ class Koch_Meinhard_steady(Koch_Meinhard):
         f_u = -D_u * (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
         f_v = -D_v * (v_xx + v_yy) + rho_v * f - sigma_v
 
-        return outputs, f_u, f_v
+        return (f_u, f_v)
 
 
 class Schnakenberg_steady(Schnakenberg):
@@ -702,31 +719,14 @@ class Schnakenberg_steady(Schnakenberg):
         c_1: PDE_Parameter,
         c_2: PDE_Parameter,
         c_3: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(D_u, D_v, c_0, c_1, c_2, c_3, print_precision)
+        super().__init__(D_u, D_v, c_0, c_1, c_2, c_3, regularise, print_precision)
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        _, p2 = pinn.gradients(x, outputs)
-
-        u = outputs[:, 0]
-        v = outputs[:, 1]
-
-        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        # u_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        # v_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        (y, u, _, u_xx, u_yy, v, _, v_xx, v_yy) = self.derivatives(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -739,7 +739,7 @@ class Schnakenberg_steady(Schnakenberg):
         f_u = -D_u * (u_xx + u_yy) - c_1 + c_0 * u - c_3 * u2v
         f_v = -D_v * (v_xx + v_yy) - c_2 + c_3 * u2v
 
-        return outputs, f_u, f_v
+        return (f_u, f_v)
 
 
 class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
@@ -751,31 +751,14 @@ class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
         gamma: PDE_Parameter,
         mu: PDE_Parameter,
         sigma: PDE_Parameter,
+        regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(D_u, D_v, b, gamma, mu, sigma, print_precision)
+        super().__init__(D_u, D_v, b, gamma, mu, sigma, regularise, print_precision)
 
     @tf.function
     def residual(self, pinn, x):
-        outputs = pinn.net(x)
-        _, p2 = pinn.gradients(x, outputs)
-
-        u = outputs[:, 0]
-        v = outputs[:, 1]
-
-        # u_x = tf.cast(p1[0][:, 0], pinn.dtype)
-        # u_y = tf.cast(p1[0][:, 1], pinn.dtype)
-        # u_t = tf.cast(p1[0][:, 2], pinn.dtype)
-
-        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
-        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
-
-        # v_x = tf.cast(p1[1][:, 0], pinn.dtype)
-        # v_y = tf.cast(p1[1][:, 1], pinn.dtype)
-        # v_t = tf.cast(p1[1][:, 2], pinn.dtype)
-
-        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
-        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        (y, u, _, u_xx, u_yy, v, _, v_xx, v_yy) = self.derivatives(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -787,4 +770,4 @@ class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
         f_u = -D_u * (u_xx + u_yy) - mu * u + u * u * u + v - sigma
         f_v = -D_v * (v_xx + v_yy) - b * u + gamma * v
 
-        return outputs, f_u, f_v
+        return (f_u, f_v)

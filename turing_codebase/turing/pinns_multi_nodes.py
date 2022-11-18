@@ -6,7 +6,7 @@ import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 from .utils import indices, TINN_Dataset
-from .pinns import NN, PDE_Residual, Loss
+from .pinns import NN, Loss, Norm
 
 
 def default_printer2(s):
@@ -19,7 +19,7 @@ class TINN_multi_nodes(tf.Module):
     def __init__(
         self,
         pinn: NN,
-        pde_residual: PDE_Residual,
+        pde_residual: Loss,
         loss: Loss,
         extra_loss=[],
         nodes_n=2,

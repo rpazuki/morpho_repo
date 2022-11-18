@@ -125,36 +125,51 @@ Simulation = namedtuple(
 
 class TINN_Dataset(tf.data.Dataset):
     # def
-    def __new__(cls, X, Y, X_PDE=None, shuffle=True, dtype=tf.float64):
+    def __new__(cls, dtype, X, *args):
 
-        if X_PDE is None:
-            ds = tf.data.Dataset.from_tensor_slices((X, Y)).map(lambda x, y: (tf.cast(x, dtype), tf.cast(y, dtype)))
-        else:
+        tuple_of_list = (X,) + args
+        lens = np.array([len(item) for item in tuple_of_list])
+        max_index = np.where(lens == np.max(lens))[0][0]
 
-            def gen():
-                l_x = len(X)
-                l_pde = len(X_PDE)
-                if l_x <= l_pde:
-                    for x, y, p in zip(cycle(X), cycle(Y), X_PDE):
-                        yield (x, y, p)
-                else:
-                    for x, y, p in zip(X, Y, cycle(X_PDE)):
-                        yield (x, y, p)
-
-            ds = tf.data.Dataset.from_generator(
-                gen,
-                output_types=(dtype, dtype, dtype),
+        def gen_list():
+            z = zip(
+                *[tuple_of_list[i] if i == max_index else cycle(tuple_of_list[i]) for i in range(len(tuple_of_list))]
             )
-        if shuffle:
-            ds = ds.shuffle(len(X), reshuffle_each_iteration=True)
+
+            for items in z:
+                yield items
+
+            # if X_PDE is None:
+            #     ds = tf.data.Dataset.from_tensor_slices((X, Y)).map(
+            # lambda x, y: (tf.cast(x, dtype), tf.cast(y, dtype)))
+            # else:
+
+            #     def gen():
+            #         l_x = len(X)
+            #         l_pde = len(X_PDE)
+            #         if l_x <= l_pde:
+            #             for x, y, p in zip(cycle(X), cycle(Y), X_PDE):
+            #                 yield (x, y, p)
+            #         else:
+            #             for x, y, p in zip(X, Y, cycle(X_PDE)):
+            #                 yield (x, y, p)
+
+        ds = tf.data.Dataset.from_generator(
+            gen_list,
+            output_types=tuple([dtype for _ in tuple_of_list]),
+        )
 
         setattr(ds, "__parameters__", {})
-        ds.__parameters__["x_size"] = len(X)
-        setattr(ds, "x_size", ds.__parameters__["x_size"])
-        ds.__parameters__["x_pde_size"] = ds.x_size if X_PDE is None else len(X_PDE)
-        setattr(ds, "x_pde_size", ds.__parameters__["x_pde_size"])
-        ds.__parameters__["has_x_pde"] = False if X_PDE is None else True
-        setattr(ds, "has_x_pde", ds.__parameters__["has_x_pde"])
+        ds.__parameters__["sizes"] = lens
+        setattr(ds, "sizes", ds.__parameters__["sizes"])
+        ds.__parameters__["max_index"] = lens
+        setattr(ds, "max_index", ds.__parameters__["max_index"])
+        # ds.__parameters__["x_size"] = len(X)
+        # setattr(ds, "x_size", ds.__parameters__["x_size"])
+        # ds.__parameters__["x_pde_size"] = ds.x_size if X_PDE is None else len(X_PDE)
+        # setattr(ds, "x_pde_size", ds.__parameters__["x_pde_size"])
+        # ds.__parameters__["has_x_pde"] = False if X_PDE is None else True
+        # setattr(ds, "has_x_pde", ds.__parameters__["has_x_pde"])
 
         def override_save(path_dir, name):
             return cls.save(ds, path_dir, name)
@@ -165,18 +180,20 @@ class TINN_Dataset(tf.data.Dataset):
 
     def save(self, path_dir, name):
         path = pathlib.PurePath(path_dir).joinpath(name)
-        if self.has_x_pde:
-            with open(f"{str(path)}_X.pkl", "wb") as f:
-                pickle.dump([(x.tolist()) for x, _, _ in self.as_numpy_iterator()], f)
-            with open(f"{str(path)}_Y.pkl", "wb") as f:
-                pickle.dump([(y.tolist()) for _, y, _ in self.as_numpy_iterator()], f)
-            with open(f"{str(path)}_X_PDE.pkl", "wb") as f:
-                pickle.dump([(x.tolist()) for _, _, x in self.as_numpy_iterator()], f)
-        else:
-            with open(f"{str(path)}_X.pkl", "wb") as f:
-                pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
-            with open(f"{str(path)}_Y.pkl", "wb") as f:
-                pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
+        with open(f"{str(path)}_data.pkl", "wb") as f:
+            pickle.dump([item for item in self.as_numpy_iterator()], f)
+        # if self.has_x_pde:
+        #     with open(f"{str(path)}_X.pkl", "wb") as f:
+        #         pickle.dump([(x.tolist()) for x, _, _ in self.as_numpy_iterator()], f)
+        #     with open(f"{str(path)}_Y.pkl", "wb") as f:
+        #         pickle.dump([(y.tolist()) for _, y, _ in self.as_numpy_iterator()], f)
+        #     with open(f"{str(path)}_X_PDE.pkl", "wb") as f:
+        #         pickle.dump([(x.tolist()) for _, _, x in self.as_numpy_iterator()], f)
+        # else:
+        #     with open(f"{str(path)}_X.pkl", "wb") as f:
+        #         pickle.dump([(x.tolist()) for x, _ in self.as_numpy_iterator()], f)
+        #     with open(f"{str(path)}_Y.pkl", "wb") as f:
+        #         pickle.dump([(y.tolist()) for _, y in self.as_numpy_iterator()], f)
 
         with open(f"{str(path)}_parameters.pkl", "wb") as f:
             pickle.dump(self.__parameters__, f)
@@ -185,19 +202,21 @@ class TINN_Dataset(tf.data.Dataset):
     def restore(cls, path_dir, name, dtype=tf.float64):
         path = pathlib.PurePath(path_dir).joinpath(name)
         # asset = tf.saved_model.load(str(path))
-        with open(f"{str(path)}_X.pkl", "rb") as f:
-            X = pickle.load(f)
-        with open(f"{str(path)}_Y.pkl", "rb") as f:
-            Y = pickle.load(f)
-        if os.path.exists(f"{str(path)}_X_PDE.pkl"):
-            with open(f"{str(path)}_X_PDE.pkl", "rb") as f:
-                X_PDE = pickle.load(f)
-        else:
-            X_PDE = None
+        # with open(f"{str(path)}_X.pkl", "rb") as f:
+        #     X = pickle.load(f)
+        # with open(f"{str(path)}_Y.pkl", "rb") as f:
+        #     Y = pickle.load(f)
+        # if os.path.exists(f"{str(path)}_X_PDE.pkl"):
+        #     with open(f"{str(path)}_X_PDE.pkl", "rb") as f:
+        #         X_PDE = pickle.load(f)
+        # else:
+        #     X_PDE = None
+        with open(f"{str(path)}_data.pkl", "rb") as f:
+            items = pickle.load(f)
         with open(f"{str(path)}_parameters.pkl", "rb") as f:
             __parameters__ = pickle.load(f)
 
-        ret = TINN_Dataset(X, Y, X_PDE, shuffle=False, dtype=dtype)
+        ret = TINN_Dataset(dtype, *items)
         ret.__parameters__ = __parameters__
         for k, v in __parameters__.items():
             setattr(ret, k, v)
@@ -215,15 +234,16 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
         thining_step=0,
         pde_ratio=0,
         signal_to_noise=0,
-        shuffle=True,
+        _X_internal_=None,
+        __values__=None,
         __internal__=False,
-        __obs_X__=None,
-        __obs_Y__=None,
-        __obs_X_PDE__=None,
     ):
         if __internal__:
-            ds = super().__new__(cls, __obs_X__, __obs_Y__, __obs_X_PDE__, False, dtype)
-            return ds
+            if __values__ is None:
+                return super().__new__(cls, dtype, _X_internal_)
+            else:
+                return super().__new__(cls, dtype, _X_internal_, *__values__)
+
         data_path = pathlib.PurePath(path)
         with open(data_path.joinpath(f"{name}.npy"), "rb") as f:
             data = np.load(f)
@@ -249,13 +269,11 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
             model_params = {**model_params, **{"pde_data_size": (T * N) / pde_ratio}}
 
         dataset = create_dataset(data, t_star, N, T, L, **model_params)
-        obs_X = dataset["obs_input"]
-        obs_Y = dataset["obs_output"]
+        obs_X = np.concatenate([dataset["obs_input"], dataset["obs_output"]], axis=1)
         if pde_ratio > 0:
-            pde_X = dataset["pde"]
+            ds = super().__new__(cls, dtype, obs_X, dataset["pde"])
         else:
-            pde_X = None
-        ds = super().__new__(cls, obs_X, obs_Y, pde_X, shuffle, dtype)
+            ds = super().__new__(cls, dtype, obs_X)
         ds.__parameters__["lb"] = dataset["lb"]
         setattr(ds, "lb", ds.__parameters__["lb"])
         ds.__parameters__["ub"] = dataset["ub"]
@@ -299,17 +317,16 @@ class TINN_Single_Sim_Dataset(TINN_Dataset):
         # asset = tf.saved_model.load(str(path))
         with open(f"{str(path)}_X.pkl", "rb") as f:
             X = pickle.load(f)
-        with open(f"{str(path)}_Y.pkl", "rb") as f:
-            Y = pickle.load(f)
+        # with open(f"{str(path)}_Y.pkl", "rb") as f:
+        #    Y = pickle.load(f)
         if os.path.exists(f"{str(path)}_X_PDE.pkl"):
             with open(f"{str(path)}_X_PDE.pkl", "rb") as f:
                 X_PDE = pickle.load(f)
+                ret = TINN_Single_Sim_Dataset(None, None, _X_internal_=X, __values__=[X_PDE], __internal__=True)
         else:
-            X_PDE = None
+            ret = TINN_Single_Sim_Dataset(None, None, _X_internal_=X, __internal__=True)
         with open(f"{str(path)}_parameters.pkl", "rb") as f:
             __parameters__ = pickle.load(f)
-
-        ret = TINN_Single_Sim_Dataset(None, None, __internal__=True, __obs_X__=X, __obs_Y__=Y, __obs_X_PDE__=X_PDE)
 
         for k, v in __parameters__.items():
             setattr(ret, k, v)
@@ -480,6 +497,20 @@ class TINN_Multiple_Sim_Dataset(TINN_Dataset):
         return ds
 
 
+def diffusion(n, c):
+    dc = np.zeros_like(c)
+    for i in range(n[0]):
+        for j in range(n[1]):
+            # Periodic boundary condition
+            i_prev = (i - 1) % n[0]
+            i_next = (i + 1) % n[0]
+
+            j_prev = (j - 1) % n[1]
+            j_next = (j + 1) % n[1]
+            dc[i, j] = c[i_prev, j] + c[i_next, j] + c[i, j_prev] + c[i, j_next] - 4.0 * c[i, j]
+    return dc
+
+
 def minimize_parameters(pde_loss, pinn, inputs, parameters, norm=lambda x: np.sum(x**2), tol=1e-7, **kwargs):
 
     # key_vals = [(v, v.tf_var.numpy()) for _, v in pde_loss.__dict__.items() if isinstance(v, PDE_Parameter)]
@@ -566,6 +597,7 @@ def create_dataset(
     boundary_data_size=None,
     signal_to_noise=0,
     shuffle=True,
+    diffusion=None,
 ):
     x_size = data.shape[1]
     y_size = data.shape[2]
@@ -577,9 +609,24 @@ def create_dataset(
     YY = np.tile(Y.flatten(), T)  # N x T
     TT = np.repeat(t_star[-T:], N)  # T x N
 
-    AA = np.einsum("ijk->kij", data[0, :, :, -T:]).flatten()  # N x T
-    SS = np.einsum("ijk->kij", data[1, :, :, -T:]).flatten()  # N x T
+    UU = np.einsum("ijk->kij", data[0, :, :, -T:]).flatten()  # N x T
+    VV = np.einsum("ijk->kij", data[1, :, :, -T:]).flatten()  # N x T
 
+    if diffusion is not None:
+        DUU = np.einsum("ijk->kij", diffusion[0, :, :, -T:]).flatten()  # N x T
+        DVV = np.einsum("ijk->kij", diffusion[1, :, :, -T:]).flatten()
+
+        X1, Y1 = np.meshgrid(
+            np.r_[x_domain[1:], x_domain[0]], np.r_[y_domain[1:], y_domain[0]], sparse=False, indexing="ij"
+        )
+        XX_right = np.tile(X1.flatten(), T)  # N x T
+        YY_bottom = np.tile(Y1.flatten(), T)  # N x T
+
+        X2, Y2 = np.meshgrid(
+            np.r_[x_domain[-1], x_domain[:-1]], np.r_[y_domain[-1], y_domain[:-1]], sparse=False, indexing="ij"
+        )
+        XX_left = np.tile(X2.flatten(), T)  # N x T
+        YY_up = np.tile(Y2.flatten(), T)  # N x T
     # x = XX[:, np.newaxis]  # NT x 1
     # y = YY[:, np.newaxis]  # NT x 1
     # t = TT[:, np.newaxis]  # NT x 1
@@ -602,8 +649,8 @@ def create_dataset(
     ##########################################
     # Including noise
     if signal_to_noise > 0:
-        signal_amp_a = (np.max(AA) - np.min(AA)) / 2.0
-        signal_amp_s = (np.max(SS) - np.min(SS)) / 2.0
+        signal_amp_a = (np.max(UU) - np.min(UU)) / 2.0
+        signal_amp_s = (np.max(VV) - np.min(VV)) / 2.0
         sigma_a = signal_amp_a * signal_to_noise
         sigma_s = signal_amp_s * signal_to_noise
     # Observed data
@@ -629,7 +676,7 @@ def create_dataset(
 
     ret = {
         "obs_input": np.c_[XX[idx_data], YY[idx_data], TT[idx_data]],
-        "obs_output": np.c_[AA[idx_data], SS[idx_data]],
+        "obs_output": np.c_[UU[idx_data], VV[idx_data]],
         "lb": lb,
         "ub": ub,
     }
@@ -649,6 +696,22 @@ def create_dataset(
                 "boundary_RT": np.c_[
                     boundary_XX_RT[idx_boundary], boundary_YY_RT[idx_boundary], boundary_TT[idx_boundary]
                 ],
+            },
+        }
+    if diffusion is not None:
+        ret = {
+            **ret,
+            **{
+                "diff_input": np.c_[
+                    XX[idx_data],
+                    YY[idx_data],
+                    TT[idx_data],
+                    XX_left[idx_data],
+                    XX_right[idx_data],
+                    YY_bottom[idx_data],
+                    YY_up[idx_data],
+                ],
+                "diff_output": np.c_[DUU[idx_data], DVV[idx_data]],
             },
         }
 
