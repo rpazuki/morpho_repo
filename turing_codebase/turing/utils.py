@@ -933,9 +933,83 @@ def merge_dict_multi_nodes(dict_1, *dicts):
 #         ret[key] = np.vstack([dict_i[key] for dict_i in all_dicts])
 
 #     return ret
-
-
 def plot_result(
+    results,
+    model,
+    param_names=None,
+    start=0,
+    end=-1,
+    yscale="log",
+    y_lims=None,
+    figsize=(14, 5),
+    file_name=None,
+):
+    import matplotlib.pyplot as plt
+
+    def _closing_commands_(plot_name=""):
+        plt.legend()
+        plt.grid()
+        plt.xlabel("Iterations")
+        plt.yscale(yscale)
+        if y_lims is not None:
+            plt.ylim(y_lims)
+        if file_name is not None:
+            plt.savefig((f"{file_name}_{plot_name}.png"), bbox_inches="tight")
+            plt.close()
+        else:
+            plt.show()
+
+    # _ = plt.figure(figsize=figsize)
+    # plt.title("Training accuracy for observations")
+    # plt.plot(results["training_obs_accuracy"][start:end], label="accuracy")
+    # _closing_commands_("training_accuracy")
+    _ = plt.figure(figsize=figsize)
+    plt.title("Total Loss")
+    plt.plot(results["loss_total"][start:end], label="Real")
+    plt.plot(results["loss_regularisd_total"][start:end], label="Regularisd")
+    _closing_commands_("Total losses")
+
+    for i, loss in enumerate(model.losses):
+        _ = plt.figure(figsize=figsize)
+        plt.title(loss.name)
+        ts = results[f"{loss.name}_values"][start:end, :]
+        for j in range(ts.shape[1]):
+            plt.plot(ts[:, j], label=f"{j+1}")
+        _closing_commands_("Losses")
+
+    for i, loss in enumerate(model.no_input_losses):
+        _ = plt.figure(figsize=figsize)
+        plt.title(loss.name)
+        ts = results[f"{loss.name}_values"][start:end, :]
+        for j in range(ts.shape[1]):
+            plt.plot(ts[:, j], label=f"{j+1}")
+        _closing_commands_("No input losses")
+
+    if "lambdas" in results.keys():
+        _ = plt.figure(figsize=figsize)
+        plt.title(r"$\lambda$")
+        ts = results["lambdas"][start:end, :]
+        for j in range(ts.shape[1]):
+            plt.plot(ts[:, j], label=r"$\lambda_{" f"{j+1}" r"}$")
+        _closing_commands_("Lambdas")
+
+    if "grads" in results.keys():
+        _ = plt.figure(figsize=figsize)
+        plt.title("Gradients")
+        ts = results["grads"][start:end, :]
+        for j in range(ts.shape[1]):
+            plt.plot(ts[:, j], label=f"{j+1}")
+        _closing_commands_("Gradients")
+
+    if param_names is not None:
+        _ = plt.figure(figsize=figsize)
+        plt.title(r"Estimated parameters")
+        for name in param_names:
+            plt.plot(results[f"{name}"][start:end], label=f"{name}")
+        _closing_commands_("parameters")
+
+
+def plot_result_old(
     results,
     param_names=None,
     start=0,

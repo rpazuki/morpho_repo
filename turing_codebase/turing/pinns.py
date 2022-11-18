@@ -646,7 +646,7 @@ class TINN(tf.Module):
             # Display metrics at the end of each epoch.
             if epoch % print_interval == 0:
                 self._print_metrics_(sample_regularisations, sample_parameters, printer)
-            if stop_threshold >= float(self.train_acc):
+            if stop_threshold >= float(self.loss_total):
                 printer("############################################")
                 printer("#               Early stop                 #")
                 printer("############################################")
