@@ -511,7 +511,25 @@ def diffusion(n, c):
     return dc
 
 
-def minimize_parameters(pde_loss, pinn, inputs, parameters, norm=lambda x: np.sum(x**2), tol=1e-7, **kwargs):
+def second_order_derivatives(n, c):
+    dc_xx = np.zeros_like(c)
+    dc_yy = np.zeros_like(c)
+    for i in range(n[0]):
+        for j in range(n[1]):
+            # Periodic boundary condition
+            i_prev = (i - 1) % n[0]
+            i_next = (i + 1) % n[0]
+
+            j_prev = (j - 1) % n[1]
+            j_next = (j + 1) % n[1]
+            dc_xx[i, j] = c[i_prev, j] + c[i_next, j] - 2.0 * c[i, j]
+            dc_yy[i, j] = c[i, j_prev] + c[i, j_next] - 2.0 * c[i, j]
+    return dc_xx, dc_yy
+
+
+def minimize_parameters(
+    pde_loss, pinn, inputs, parameters, norm=lambda x: np.sum(x**2), method="Powell", tol=1e-7, **kwargs
+):
 
     # key_vals = [(v, v.tf_var.numpy()) for _, v in pde_loss.__dict__.items() if isinstance(v, PDE_Parameter)]
     key_vals = [(v, v.tf_var.numpy()) for v in parameters]
@@ -523,10 +541,10 @@ def minimize_parameters(pde_loss, pinn, inputs, parameters, norm=lambda x: np.su
         for pde_param, value in zip(pde_params, args):
             pde_param.set_value(value)
 
-        _, test_pde_u, test_pde_v = pde_loss.residual(pinn, inputs)
+        test_pde_u, test_pde_v = pde_loss.residual(pinn, inputs)
         return norm(test_pde_u) + norm(test_pde_v)
 
-    return minimize(minimize_model_parameters, initial_tuple, method="Powell", tol=tol, **kwargs)
+    return minimize(minimize_model_parameters, initial_tuple, method=method, tol=tol, **kwargs)
 
 
 def lower_upper_bounds(inputs_of_inputs):
@@ -598,6 +616,8 @@ def create_dataset(
     signal_to_noise=0,
     shuffle=True,
     diffusion=None,
+    derivatives=None,
+    idx_data=None,
 ):
     x_size = data.shape[1]
     y_size = data.shape[2]
@@ -627,6 +647,10 @@ def create_dataset(
         )
         XX_left = np.tile(X2.flatten(), T)  # N x T
         YY_up = np.tile(Y2.flatten(), T)  # N x T
+    if derivatives is not None:
+        dd_us = np.array([np.einsum("ijk->kij", d[0, :, :, -T:]).flatten() for d in derivatives])
+        dd_vs = np.array([np.einsum("ijk->kij", d[1, :, :, -T:]).flatten() for d in derivatives])
+
     # x = XX[:, np.newaxis]  # NT x 1
     # y = YY[:, np.newaxis]  # NT x 1
     # t = TT[:, np.newaxis]  # NT x 1
@@ -654,10 +678,11 @@ def create_dataset(
         sigma_a = signal_amp_a * signal_to_noise
         sigma_s = signal_amp_s * signal_to_noise
     # Observed data
-    if shuffle:
-        idx_data = np.random.choice(N * T, training_data_size, replace=False)
-    else:
-        idx_data = list(range(training_data_size))
+    if idx_data is None:
+        if shuffle:
+            idx_data = np.random.choice(N * T, training_data_size, replace=False)
+        else:
+            idx_data = list(range(training_data_size))
     # PDE colocations
     if pde_data_size is not None:
         if shuffle:
@@ -679,6 +704,7 @@ def create_dataset(
         "obs_output": np.c_[UU[idx_data], VV[idx_data]],
         "lb": lb,
         "ub": ub,
+        "idx_data": idx_data,
     }
     if pde_data_size is not None:
         ret = {**ret, **{"pde": np.c_[XX[idx_pde], YY[idx_pde], TT[idx_pde]]}}
@@ -696,8 +722,18 @@ def create_dataset(
                 "boundary_RT": np.c_[
                     boundary_XX_RT[idx_boundary], boundary_YY_RT[idx_boundary], boundary_TT[idx_boundary]
                 ],
+                "idx_boundary": idx_boundary,
             },
         }
+    if derivatives is not None:
+        ret = {
+            **ret,
+            **{
+                "der_u": dd_us[:, idx_data],
+                "der_v": dd_vs[:, idx_data],
+            },
+        }
+
     if diffusion is not None:
         ret = {
             **ret,
@@ -886,7 +922,8 @@ def merge_dict(dict_1, *dicts):
     all_dicts = [dict_1, *dicts]
     for key in dict_1.keys():
         ret[key] = np.hstack([dict_i[key] for dict_i in all_dicts])
-
+    for key in ret.keys():
+        ret[key] = ret[key].T
     return ret
 
 
@@ -974,7 +1011,7 @@ def plot_result(
         plt.title(loss.name)
         ts = results[f"{loss.name}_values"][start:end, :]
         for j in range(ts.shape[1]):
-            plt.plot(ts[:, j], label=f"{j+1}")
+            plt.plot(ts[:, j], label=f"({j+1}) {loss.residual_ret_names[j]}")
         _closing_commands_("Losses")
 
     for i, loss in enumerate(model.no_input_losses):
@@ -982,7 +1019,7 @@ def plot_result(
         plt.title(loss.name)
         ts = results[f"{loss.name}_values"][start:end, :]
         for j in range(ts.shape[1]):
-            plt.plot(ts[:, j], label=f"{j+1}")
+            plt.plot(ts[:, j], label=f"({j+1}) {loss.residual_ret_names[j]}")
         _closing_commands_("No input losses")
 
     if "lambdas" in results.keys():

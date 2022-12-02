@@ -217,7 +217,9 @@ class Res_NN(NN):
 
 
 class Loss(tf.Module):
-    def __init__(self, name, regularise=True, residual_ret_num=2, print_precision=".5f", **kwargs):
+    def __init__(
+        self, name, regularise=True, residual_ret_num=2, residual_ret_names="", print_precision=".5f", **kwargs
+    ):
         """Loss value that is calulated for the output of the pinn
 
         Args:
@@ -229,6 +231,10 @@ class Loss(tf.Module):
         self.print_precision = print_precision
         self._trainables_ = ()
         self.residual_ret_num = residual_ret_num
+        if residual_ret_names == "":
+            self.residual_ret_names = tuple(["" for _ in range(residual_ret_num)])
+        else:
+            self.residual_ret_names = residual_ret_names
         self.regularise = regularise
         self.__version__ = 0.1
 
@@ -311,6 +317,31 @@ class Loss(tf.Module):
         v_yys = [tf.cast(p2[i][:, 1], pinn.dtype) for i in range(2)]
 
         return [y, *vs, *v_ts, *v_xxs, *v_yys]
+
+    def derivatives_steady(self, pinn, x):
+        y = pinn.net(x)
+        _, p2 = pinn.gradients(x, y)
+
+        u = y[:, 0]
+        v = y[:, 1]
+
+        u_xx = tf.cast(p2[0][:, 0], pinn.dtype)
+        u_yy = tf.cast(p2[0][:, 1], pinn.dtype)
+
+        v_xx = tf.cast(p2[1][:, 0], pinn.dtype)
+        v_yy = tf.cast(p2[1][:, 1], pinn.dtype)
+        return y, u, u_xx, u_yy, v, v_xx, v_yy
+
+    def derivatives_steady_multi_nodes(self, pinn, x):
+        y = pinn.net(x)
+        _, p2 = pinn.gradients(x, y)
+
+        vs = [y[:, i] for i in range(y.shape[1])]
+
+        v_xxs = [tf.cast(p2[i][:, 0], pinn.dtype) for i in range(2)]
+        v_yys = [tf.cast(p2[i][:, 1], pinn.dtype) for i in range(2)]
+
+        return [y, *vs, *v_xxs, *v_yys]
 
     @tf.function
     def residual_multi_nodes(self, pinn, x):
@@ -397,7 +428,7 @@ class Norm:
         self.__version__ = 0.1
 
     def reduce_norm(self, tupled_x, axis=None):
-        if self.childs is None:
+        if len(self.childs) == 0:
             return 0
         else:
 
@@ -525,7 +556,7 @@ class TINN(tf.Module):
             loss_value = regularised_loss_value + unregularised_loss_value
 
         if lambdas_state[0] > 0:
-            self._update_lambdas_(elements, lambdas_state, tape, regularisable_norms, trainables)
+            self._update_lambdas_(lambdas_state, regularisable_norms, trainables)
 
         grads = tape.gradient(loss_value, trainables)
         if dummy_train:
@@ -545,7 +576,7 @@ class TINN(tf.Module):
         # Reload variables
         [x.assign(y) for x, y in zip(trainables, saved_vars)]
 
-    def _update_lambdas_(self, elements, lambdas_state, tape, regularisable_norms, trainables):
+    def _update_lambdas_(self, lambdas_state, regularisable_norms, trainables):
         grads = [tf.gradients(regularisable_norms[i], trainables) for i in range(regularisable_norms.shape[0])]
         reduced_grads = tf.stack(
             [tf.reduce_sum([tf.reduce_sum(tf.square(item)) for item in grad_i]) for grad_i in grads]
@@ -594,12 +625,13 @@ class TINN(tf.Module):
         #
         # For first epoch, we store the number of steps to compelete a full epoch
         last_step = -1
-        start_time = time.time()
+        if print_interval > 0:
+            start_time = time.time()
         x_sizes = np.max(dataset.sizes)
         #
         dataset2 = dataset.cache().batch(batch_size)
         for epoch in range(epochs):
-            if epoch % print_interval == 0:
+            if print_interval > 0 and epoch % print_interval == 0:
                 printer(f"\nStart of epoch {epoch:d}")
 
             step = 0
@@ -624,17 +656,22 @@ class TINN(tf.Module):
                     last_step = step
                 # add the batch loss: Note that the weights are calculated based on the batch size
                 #                     especifically, the last batch can have a different size
-                ws = np.array([len(item) for item in element]) / x_sizes
+                ws = np.array([len(item) for item in element]) / x_sizes  # [:, np.newaxis]
 
                 self.loss_reg_total += loss_reg_total_batch
                 if self.num_loss > 0:
                     loss_values_batch = np.array([item.numpy() for item in loss_values_batch])
-                    self.loss_values += loss_values_batch * ws[: self.num_loss]
+                    for i, norms in enumerate(loss_values_batch):
+
+                        self.loss_values[i] += ws[i] * norms
                 if self.num_no_input_loss > 0:
                     loss_no_input_values_batch = np.array([item.numpy() for item in loss_no_input_values_batch])
                     self.loss_no_input_values += loss_no_input_values_batch
 
-                self.loss_total += np.sum(np.sum(loss_values_batch) + np.sum(loss_no_input_values_batch))
+                if self.num_loss > 0:
+                    self.loss_total += np.sum(np.sum(np.sum([np.sum(item) for item in loss_values_batch])))
+                if self.num_no_input_loss > 0:
+                    self.loss_total += np.sum(np.sum([np.sum(item) for item in loss_no_input_values_batch]))
 
                 step += 1
             # end of for step, o_batch_indices in enumerate(indice(batch_size, shuffle, X_size))
@@ -644,7 +681,7 @@ class TINN(tf.Module):
             if epoch_callback is not None:
                 epoch_callback(epoch, samples, self)
             # Display metrics at the end of each epoch.
-            if epoch % print_interval == 0:
+            if print_interval > 0 and epoch % print_interval == 0:
                 self._print_metrics_(sample_regularisations, sample_parameters, printer)
             if stop_threshold >= float(self.loss_total):
                 printer("############################################")
@@ -655,7 +692,7 @@ class TINN(tf.Module):
             # Reset training metrics at the end of each epoch
             train_acc_metric.reset_states()
             self._reset_losses_()
-            if epoch % print_interval == 0:
+            if print_interval > 0 and epoch % print_interval == 0:
                 printer(f"Time taken: {(time.time() - start_time):.2f}s")
                 start_time = time.time()
 
@@ -673,16 +710,16 @@ class TINN(tf.Module):
                 },
             }
             for i, loss in enumerate(self.losses):
-                ret[f"{loss.name}_values"] = np.zeros((epochs, loss.residual_ret_num))
+                ret[f"{loss.name}_values"] = np.zeros((loss.residual_ret_num, epochs))
             for i, loss in enumerate(self.no_input_losses):
-                ret[f"{loss.name}_values"] = np.zeros((epochs, loss.residual_ret_num))
+                ret[f"{loss.name}_values"] = np.zeros((loss.residual_ret_num, epochs))
 
         if sample_regularisations:
             ret = {
                 **ret,
                 **{
-                    "lambdas": np.zeros((epochs, self.num_regularisers)),
-                    "grads": np.zeros((epochs, self.num_regularisers)),
+                    "lambdas": np.zeros((len(self.lambdas), epochs)),
+                    "grads": np.zeros((len(self.grad_norms), epochs)),
                 },
             }
         if sample_parameters:
@@ -700,17 +737,15 @@ class TINN(tf.Module):
             samples["loss_total"][epoch] = self.loss_total
             samples["loss_regularisd_total"][epoch] = self.loss_reg_total
             for i, loss in enumerate(self.losses):
-                samples[f"{loss.name}_values"][epoch] = self.loss_values[i]
+                samples[f"{loss.name}_values"][:, epoch] = self.loss_values[i]
             for i, loss in enumerate(self.no_input_losses):
-                samples[f"{loss.name}_values"][epoch] = self.loss_no_input_values[i]
+                samples[f"{loss.name}_values"][:, epoch] = self.loss_no_input_values[i]
 
         if sample_regularisations:
-            lambdas = [item.numpy() for item in self.lambdas]
-            for i in range(self.num_regularisers):
-                samples["lambdas"][epoch, i] = lambdas[i]
-            grads = [item.numpy() for item in self.grad_norms]
-            for i in range(self.num_regularisers):
-                samples["grads"][epoch, i] = grads[i]
+            lambdas = np.array([item.numpy() for item in self.lambdas])
+            samples["lambdas"][:, epoch] = lambdas
+            grads = np.array([item.numpy() for item in self.grad_norms])
+            samples["grads"][:, epoch] = grads
 
         if sample_parameters:
             for loss in self.losses:
@@ -721,20 +756,21 @@ class TINN(tf.Module):
                     samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
     def _print_metrics_(self, sample_regularisations, sample_parameters, printer=default_printer):
-        printer(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
+        # printer(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
         printer(
             f"total loss: {self.loss_total:{self.print_precision}}, "
-            f"total regularise loss: {self.loss_reg_total:{self.print_precision}}"
+            f"total regularised loss: {self.loss_reg_total:{self.print_precision}}"
         )
+        # printer("")
         for i, loss in enumerate(self.losses):
-            printer(f"{loss.name} -> " + self.CRLR_str(self.loss_values[i]))
-
+            printer(f"{loss.name} -> \n" + self.CRLR_str(self.loss_values[i], loss.residual_ret_names))
+        # printer("")
         for i, loss in enumerate(self.no_input_losses):
-            printer(f"{loss.name} -> " + self.CRLR_str(self.loss_no_input_values[i]))
-
+            printer(f"{loss.name} -> \n" + self.CRLR_str(self.loss_no_input_values[i], loss.residual_ret_names))
+        # printer("")
         if sample_regularisations:
             lambdas = [item.numpy() for item in self.lambdas]
-            printer(self.CRLR_str(lambdas, "lambdas"))
+            printer(self.CRLR_str(lambdas, title="lambdas"))
 
         if sample_parameters:
             for loss in self.losses:
@@ -746,14 +782,16 @@ class TINN(tf.Module):
                 if s != "":
                     printer(s)
 
-    def CRLR_str(self, t_vars, title=""):
+    def CRLR_str(self, t_vars, labels=None, title=""):
         s = ""
         CR = "\n"
         C = ""
+        if labels is None:
+            labels = ["" for _ in t_vars]
         if len(t_vars) > 0:
             s += "".join(
                 [
-                    f"{title} ({i+1}): {v:{self.print_precision}} {CR if (i+1)%4 == 0 else C}"
+                    f"({i+1}) {title} {labels[i]}: {v:{self.print_precision}} {CR if (i+1)%3 == 0 else C}"
                     for i, v in enumerate(t_vars)
                 ]
             )
@@ -1606,3 +1644,70 @@ class TINNBackup(tf.Module):
         # Set the weights of the optimizer
         model.optimizer.set_weights(weight_values)
         return model
+
+
+class NN_Compound(NN):
+    def __init__(self, pre_pinn, lb, ub, pre_lb, pre_ub, layers, skips=None, dtype=tf.float32, **kwargs):
+        assert pre_pinn.layers[-1] == layers[0]
+        if skips is not None:
+            assert len(skips) == len(layers)
+        self.pre_Ws = [w.numpy() for w in pre_pinn.Ws]
+        self.pre_bs = [b.numpy() for b in pre_pinn.bs]
+        self.pre_lb = pre_lb
+        self.pre_ub = pre_ub
+        self.skips = skips
+        self.swtich_index = -1
+        super().__init__(layers, lb, ub, dtype, **kwargs)
+        self.lb = tf.expand_dims(tf.Variable(self.lb, dtype=dtype), axis=0)
+        self.ub = tf.expand_dims(tf.Variable(self.ub, dtype=dtype), axis=0)
+        self.__version__ = 0.1
+
+    def build(self):
+        """Create the state of the layers (weights)"""
+        weights = []
+        biases = []
+        for pre_W, pre_b in zip(self.pre_Ws, self.pre_bs):
+            W = tf.Variable(pre_W, trainable=False, dtype=self.dtype)
+            b = tf.Variable(pre_b, trainable=False, dtype=self.dtype)
+            weights.append(W)
+            biases.append(b)
+            self.swtich_index += 1
+
+        for i in range(0, self.num_layers - 1):
+            W = self.xavier_init(size=[self.layers[i], self.layers[i + 1]])
+            b = tf.Variable(tf.zeros([1, self.layers[i + 1]], dtype=self.dtype), dtype=self.dtype)
+            weights.append(W)
+            biases.append(b)
+
+        self.Ws = weights
+        self.bs = biases
+
+    @tf.function
+    def net(self, inputs):
+        # inputs_2 = self.pre_pinn(inputs)
+        # Map the inputs to the range [-1, 1]
+        H = 2.0 * (inputs - self.pre_lb) / (self.pre_ub - self.pre_lb) - 1.0
+        for i, (W, b) in enumerate(zip(self.Ws[:-1], self.bs[:-1])):
+            if i == self.swtich_index:
+                H = tf.add(tf.matmul(H, W), b)
+                H_skip = H
+                H = 2.0 * (H - self.lb) / (self.ub - self.lb) - 1.0
+            else:
+                H = tf.tanh(tf.add(tf.matmul(H, W), b))
+
+            if i > self.swtich_index and self.skips[i - self.swtich_index] == 1:
+                H += H_skip
+                H_skip = H
+                print(f" to layer{i- self.swtich_index}")
+
+            if i > self.swtich_index and self.skips[i - self.swtich_index] == 2:
+                print(f" from layer{i- self.swtich_index}")
+                H_skip = H
+
+        W = self.Ws[-1]
+        b = self.bs[-1]
+        outputs = tf.add(tf.matmul(H, W), b)
+        if self.skips[-1] == 1:
+            outputs += H_skip
+            print(f" to layer{len(self.skips)-1}")
+        return outputs

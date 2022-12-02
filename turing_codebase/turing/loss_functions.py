@@ -35,6 +35,7 @@ class Observation_Loss(Loss):
             name="Observation_Loss",
             regularise=regularise,
             residual_ret_num=2,
+            residual_ret_names=("obs u", "obs v"),
             print_precision=print_precision,
             **kwargs,
         )
@@ -48,10 +49,83 @@ class Observation_Loss(Loss):
         return (diff[:, 0], diff[:, 1])
 
 
+class Derivatives_Loss(Loss):
+    def __init__(self, dtype, Ds=[1.0, 1.0], regularise=True, input_dim: int = 3, print_precision=".5f", **kwargs):
+        super().__init__(
+            name="Derivatives_Loss",
+            regularise=regularise,
+            residual_ret_num=6,
+            residual_ret_names=("u_xx", "u_yy", "u_t", "v_xx", "v_yy", "v_t"),
+            print_precision=print_precision,
+            **kwargs,
+        )
+        self.input_dim = input_dim
+        self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
+
+    @tf.function
+    def residual(self, pinn, x):
+        inputs = x[:, : self.input_dim]
+        (_, _, u_t, u_xx, u_yy, _, v_t, v_xx, v_yy) = self.derivatives(pinn, inputs)
+        u_xx_obs = x[:, self.input_dim : self.input_dim + 1]
+        u_yy_obs = x[:, self.input_dim + 1 : self.input_dim + 2]
+        u_t_obs = x[:, self.input_dim + 2 : self.input_dim + 3]
+        v_xx_obs = x[:, self.input_dim + 3 : self.input_dim + 4]
+        v_yy_obs = x[:, self.input_dim + 4 : self.input_dim + 5]
+        v_t_obs = x[:, self.input_dim + 5 : self.input_dim + 6]
+
+        return (
+            self.Ds[0] * u_xx - u_xx_obs,
+            self.Ds[0] * u_yy - u_yy_obs,
+            u_t - u_t_obs,
+            self.Ds[1] * v_xx - v_xx_obs,
+            self.Ds[1] * v_yy - v_yy_obs,
+            v_t - v_t_obs,
+        )
+
+
+class Observation_And_Derivatives_Loss(Loss):
+    def __init__(self, dtype, Ds=[1.0, 1.0], regularise=True, input_dim: int = 3, print_precision=".5f", **kwargs):
+        super().__init__(
+            name="Derivatives_Loss",
+            regularise=regularise,
+            residual_ret_num=8,
+            residual_ret_names=("obs u", "obs v", "u_xx", "u_yy", "u_t", "v_xx", "v_yy", "v_t"),
+            print_precision=print_precision,
+            **kwargs,
+        )
+        self.input_dim = input_dim
+        self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
+
+    @tf.function
+    def residual(self, pinn, x):
+        inputs = x[:, : self.input_dim]
+        (_, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, inputs)
+        u_obs = x[:, self.input_dim : self.input_dim + 1]
+        v_obs = x[:, self.input_dim + 1 : self.input_dim + 2]
+        u_xx_obs = x[:, self.input_dim + 2 : self.input_dim + 3]
+        u_yy_obs = x[:, self.input_dim + 3 : self.input_dim + 4]
+        u_t_obs = x[:, self.input_dim + 4 : self.input_dim + 5]
+        v_xx_obs = x[:, self.input_dim + 5 : self.input_dim + 6]
+        v_yy_obs = x[:, self.input_dim + 6 : self.input_dim + 7]
+        v_t_obs = x[:, self.input_dim + 7 : self.input_dim + 8]
+
+        return (
+            u - u_obs,
+            v - v_obs,
+            self.Ds[0] * u_xx - u_xx_obs,
+            self.Ds[0] * u_yy - u_yy_obs,
+            u_t - u_t_obs,
+            self.Ds[1] * v_xx - v_xx_obs,
+            self.Ds[1] * v_yy - v_yy_obs,
+            v_t - v_t_obs,
+        )
+
+
 class Periodic_Boundary_Condition(Loss):
     def __init__(
         self,
         regularise=True,
+        input_dim=3,
         print_precision=".5f",
     ):
         """ """
@@ -60,13 +134,15 @@ class Periodic_Boundary_Condition(Loss):
             name="Periodic_Boundary_Condition",
             regularise=regularise,
             residual_ret_num=1,
+            residual_ret_names=("periodic boundary"),
             print_precision=print_precision,
         )
+        self.input_dim = input_dim
 
     @tf.function
     def residual(self, pinn, x):
-        y1 = pinn.net(x[:, :3])
-        y2 = pinn.net(x[:, 3:])
+        y1 = pinn.net(x[:, : self.input_dim])
+        y2 = pinn.net(x[:, self.input_dim :])
         return (y1 - y2,)
 
 
@@ -76,30 +152,38 @@ class Diffusion_point_Loss(Loss):
         Ds,
         dtype,
         regularise=True,
+        input_dim: int = 3,
         print_precision=".5f",
     ):
         """ """
 
         super().__init__(
-            name="Diffusion_Loss", regularise=regularise, residual_ret_num=1, print_precision=print_precision
+            name="Diffusion_Point_Loss",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("diff u", "diff v"),
+            print_precision=print_precision,
         )
         self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
+        self.input_dim = input_dim
 
     @tf.function
     def residual(self, pinn, x):
-        x_center = x[:, :3]
-        (_, _, _, u_xx, u_yy, _, _, v_xx, v_yy) = self.derivatives(pinn, x_center)
+        x_center = x[:, : self.input_dim]
+        (_, _, u_xx, u_yy, _, v_xx, v_yy) = self.derivatives_steady(pinn, x_center)
 
         diff_u = self.Ds[0] * (u_xx + u_yy)
         diff_v = self.Ds[1] * (v_xx + v_yy)
-        obs_diff = x[:, 3:]
+        obs_diff = x[:, self.input_dim :]
         # scale the observation by the grid step size
         # Note that the PINN's diffusion is scaled on differentiation time
         # diff_u_v = tf.stack([diff_u, diff_v], axis=1) - obs_diff * self.dxdy
         # scale both by diffusion constants
         # diff_u_v = tf.stack([diff_u_v[:, i] * self.Ds[i] for i in range(diff_u_v.shape[1])], axis=1)
-        diff_u_v = tf.stack([diff_u, diff_v], axis=1) - obs_diff
-        return (diff_u_v,)
+        # diff_u_v = tf.stack([diff_u, diff_v], axis=1) - obs_diff
+        diff_u = diff_u - obs_diff[:, 0]
+        diff_v = diff_v - obs_diff[:, 1]
+        return (diff_u, diff_v)
 
 
 class Diffusion_Loss(Loss):
@@ -115,7 +199,11 @@ class Diffusion_Loss(Loss):
         """ """
 
         super().__init__(
-            name="Diffusion_Loss", regularise=regularise, residual_ret_num=1, print_precision=print_precision
+            name="Diffusion_Loss",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("diff u", "diff v"),
+            print_precision=print_precision,
         )
         self.dxdy = tf.constant(np.prod([ns[i] / Ls[i] for i in range(len(ns))]), dtype=dtype)
         self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
@@ -132,8 +220,10 @@ class Diffusion_Loss(Loss):
         pinn_diff = tf.stack([pinn_diff[:, i] * self.Ds[i] for i in range(pinn_diff.shape[1])], axis=1)
 
         obs_diff = x[:, 7:]
-        diff_u_v = pinn_diff - obs_diff
-        return (diff_u_v,)
+        # diff_u_v = pinn_diff - obs_diff
+        diff_u = pinn_diff[:, :1] - obs_diff[:, :1]
+        diff_v = pinn_diff[:, 1:] - obs_diff[:, 1:]
+        return (diff_u, diff_v)
 
 
 class Non_zero_params(Loss):
@@ -200,7 +290,11 @@ class Koch_Meinhard(Loss):
         """
 
         super().__init__(
-            name="Loss_Koch_Meinhard", regularise=regularise, residual_ret_num=2, print_precision=print_precision
+            name="Loss_Koch_Meinhard",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
         )
 
         self._trainables_ = ()
@@ -246,6 +340,159 @@ class Koch_Meinhard(Loss):
         return (f_u, f_v)
 
 
+#  \frac{\partial u}{\partial t^*} =  (\partial_{x^* x^*} + \partial_{y^* y^*}) u
+#                                     + \rho^*_u \frac{u^2 v}{1 + \kappa_u u^2} - \mu^*_u u + 1
+#  \frac{\partial v}{\partial t^*} =  D (\partial_{x^* x^*} + \partial_{y^* y^*}) v
+#                                     - \rho^*_v \frac{u^2 v}{1 + \kappa_u u^2} + \sigma^*_v
+#
+#  t = t^*/ \sigma_u
+#  x = \sqrt{D_u/\sigma_u} x^*
+#  y = \sqrt{D_u/\sigma_u} y^*
+#  D = D_v / D_u
+#  \rho_u = \rho^*_u * \sigma_u
+#  \rho_v = \rho^*_v * \sigma_u
+#  \mu_u = \mu^*_u * \sigma_u
+#  \sigma_v = \sigma^*_v * \sigma_u
+#
+class Koch_Meinhard_Dim_1(Loss):
+    def __init__(
+        self,
+        D: PDE_Parameter,
+        sigma_v: PDE_Parameter,
+        mu_u: PDE_Parameter,
+        rho_u: PDE_Parameter,
+        rho_v: PDE_Parameter,
+        kappa_u: PDE_Parameter,
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """Koch_Meinhard PDE loss
+
+        if the parameter is None, it becomes traiable with initial value set as init_vale,
+        otherwise, it will be a constant
+        alpha_u and alpha_v are scales that we use to normalise the u and v.
+        """
+
+        super().__init__(
+            name="Loss_Koch_Meinhard",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
+        )
+
+        self._trainables_ = ()
+
+        self.D = D.build()
+        self._trainables_ += D.trainable
+        self.sigma_v = sigma_v.build()
+        self._trainables_ += sigma_v.trainable
+        self.mu_u = mu_u.build()
+        self._trainables_ += mu_u.trainable
+        self.rho_u = rho_u.build()
+        self._trainables_ += rho_u.trainable
+        self.rho_v = rho_v.build()
+        self._trainables_ += rho_v.trainable
+        self.kappa_u = kappa_u.build()
+        self._trainables_ += kappa_u.trainable
+
+    @tf.function
+    def residual(self, pinn, x):
+
+        (_, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
+
+        D = self.D.get_value(x)
+        sigma_v = self.sigma_v.get_value(x)
+        mu_u = self.mu_u.get_value(x)
+        rho_u = self.rho_u.get_value(x)
+        rho_v = self.rho_v.get_value(x)
+        kappa_u = self.kappa_u.get_value(x)
+
+        f = u * u * v / (1.0 + kappa_u * u * u)
+        f_u = u_t - (u_xx + u_yy) - rho_u * f + mu_u * u - 1
+        f_v = v_t - D * (v_xx + v_yy) + rho_v * f - sigma_v
+
+        return (f_u, f_v)
+
+
+#  \frac{\partial u}{\partial t^*} =  (\partial_{xx} + \partial_{yy}) u
+#                                     + \rho^*_u \frac{u^2 v}{1 + \kappa_u u^2} - \mu^*_u u +  \sigma^*_u
+#  \frac{\partial v}{\partial t^*} =  D (\partial_{xx} + \partial_{yy}) v
+#                                     - \rho^*_v \frac{u^2 v}{1 + \kappa_u u^2} + \sigma^*_v
+#
+#  t = t^*/ D_u
+#  D = D_v / D_u
+#  \rho_u = \rho^*_u * D_u
+#  \rho_v = \rho^*_v * D_u
+#  \mu_u = \mu^*_u * D_u
+#  \sigma_u = \sigma^*_u * D_u
+#  \sigma_v = \sigma^*_v * D_u
+#
+class Koch_Meinhard_Dim_2(Loss):
+    def __init__(
+        self,
+        D: PDE_Parameter,
+        sigma_u: PDE_Parameter,
+        sigma_v: PDE_Parameter,
+        mu_u: PDE_Parameter,
+        rho_u: PDE_Parameter,
+        rho_v: PDE_Parameter,
+        kappa_u: PDE_Parameter,
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """Koch_Meinhard PDE loss
+
+        if the parameter is None, it becomes traiable with initial value set as init_vale,
+        otherwise, it will be a constant
+        alpha_u and alpha_v are scales that we use to normalise the u and v.
+        """
+
+        super().__init__(
+            name="Loss_Koch_Meinhard",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
+        )
+
+        self._trainables_ = ()
+
+        self.D = D.build()
+        self._trainables_ += D.trainable
+        self.sigma_u = sigma_u.build()
+        self._trainables_ += sigma_u.trainable
+        self.sigma_v = sigma_v.build()
+        self._trainables_ += sigma_v.trainable
+        self.mu_u = mu_u.build()
+        self._trainables_ += mu_u.trainable
+        self.rho_u = rho_u.build()
+        self._trainables_ += rho_u.trainable
+        self.rho_v = rho_v.build()
+        self._trainables_ += rho_v.trainable
+        self.kappa_u = kappa_u.build()
+        self._trainables_ += kappa_u.trainable
+
+    @tf.function
+    def residual(self, pinn, x):
+
+        (_, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
+
+        D = self.D.get_value(x)
+        sigma_u = self.sigma_u.get_value(x)
+        sigma_v = self.sigma_v.get_value(x)
+        mu_u = self.mu_u.get_value(x)
+        rho_u = self.rho_u.get_value(x)
+        rho_v = self.rho_v.get_value(x)
+        kappa_u = self.kappa_u.get_value(x)
+
+        f = u * u * v / (1.0 + kappa_u * u * u)
+        f_u = u_t - (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
+        f_v = v_t - D * (v_xx + v_yy) + rho_v * f - sigma_v
+
+        return (f_u, f_v)
+
+
 class Schnakenberg(Loss):
     def __init__(
         self,
@@ -259,7 +506,11 @@ class Schnakenberg(Loss):
         print_precision=".5f",
     ):
         super().__init__(
-            name="Loss_Schnakenberg", regularise=regularise, residual_ret_num=2, print_precision=print_precision
+            name="Loss_Schnakenberg",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
         )
 
         self._trainables_ = ()
@@ -307,7 +558,11 @@ class FitzHugh_Nagumo(Loss):
         print_precision=".5f",
     ):
         super().__init__(
-            name="FitzHugh_Nagumo", regularise=regularise, residual_ret_num=2, print_precision=print_precision
+            name="FitzHugh_Nagumo",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
         )
 
         self._trainables_ = ()
@@ -354,7 +609,13 @@ class Brusselator(Loss):
         regularise=True,
         print_precision=".5f",
     ):
-        super().__init__(name="Brusselator", regularise=regularise, residual_ret_num=2, print_precision=print_precision)
+        super().__init__(
+            name="Brusselator",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
+        )
 
         self._trainables_ = ()
         #
@@ -422,7 +683,11 @@ class Circuit2_variant5716(Loss):
         masked=False,
     ):
         super().__init__(
-            name="Circuit2_variant5716", regularise=regularise, residual_ret_num=6, print_precision=print_precision
+            name="Circuit2_variant5716",
+            regularise=regularise,
+            residual_ret_num=6,
+            residual_ret_names=("res A", "res B", "res C", "res D", "res E", "res F"),
+            print_precision=print_precision,
         )
 
         self._trainables_ = ()
@@ -563,7 +828,11 @@ class Circuit3954(Loss):
         print_precision=".5f",
     ):
         super().__init__(
-            name="Circuit2_variant5716", regularise=regularise, residual_ret_num=9, print_precision=print_precision
+            name="Circuit2_variant5716",
+            regularise=regularise,
+            residual_ret_num=9,
+            residual_ret_names=("res U", "res V", "res A", "res B", "res C", "res D", "res E", "res F", "res aTc"),
+            print_precision=print_precision,
         )
 
         self._trainables_ = ()
@@ -683,16 +952,18 @@ class Koch_Meinhard_steady(Koch_Meinhard):
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
+        alpha_u=1.0,
+        alpha_v=1.0,
         regularise=True,
         print_precision=".5f",
     ):
-        regularise = (True,)
-        regularise = (True,)
-        super().__init__(D_u, D_v, sigma_u, sigma_v, mu_u, rho_u, rho_v, kappa_u, regularise, print_precision)
+        super().__init__(
+            D_u, D_v, sigma_u, sigma_v, mu_u, rho_u, rho_v, kappa_u, alpha_u, alpha_v, regularise, print_precision
+        )
 
     @tf.function
     def residual(self, pinn, x):
-        (y, u, _, u_xx, u_yy, v, _, v_xx, v_yy) = self.derivatives(pinn, x)
+        (_, u, u_xx, u_yy, v, v_xx, v_yy) = self.derivatives_steady(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -726,7 +997,7 @@ class Schnakenberg_steady(Schnakenberg):
 
     @tf.function
     def residual(self, pinn, x):
-        (y, u, _, u_xx, u_yy, v, _, v_xx, v_yy) = self.derivatives(pinn, x)
+        (_, u, u_xx, u_yy, v, v_xx, v_yy) = self.derivatives_steady(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
@@ -758,7 +1029,7 @@ class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
 
     @tf.function
     def residual(self, pinn, x):
-        (y, u, _, u_xx, u_yy, v, _, v_xx, v_yy) = self.derivatives(pinn, x)
+        (_, u, u_xx, u_yy, v, v_xx, v_yy) = self.derivatives_steady(pinn, x)
 
         D_u = self.D_u.get_value(x)
         D_v = self.D_v.get_value(x)
