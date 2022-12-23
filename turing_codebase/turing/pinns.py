@@ -522,13 +522,18 @@ class TINN(tf.Module):
             loss_items = [loss.residual(self.pinn, elements[index]) for index, loss in enumerate(self.losses)]
             loss_items_norm = [self.norm.reduce_norm(item) for item in loss_items]
             trainables = self.pinn.trainable_variables
+            regularisable_trainables = self.pinn.trainable_variables
             for loss in self.losses:
                 trainables += loss.trainables()
+                if loss.regularise:
+                    regularisable_trainables += loss.trainables()
             if len(self.no_input_losses) > 0:
                 no_input_loss_items = [loss.residual(self.pinn, None) for loss in self.no_input_losses]
                 no_input_loss_items_norm = [self.norm.reduce_norm(item) for item in no_input_loss_items]
                 for loss in self.no_input_losses:
                     trainables += loss.trainables()
+                    if loss.regularise:
+                        regularisable_trainables += loss.trainables()
             else:
                 no_input_loss_items = []
                 no_input_loss_items_norm = 0.0
@@ -556,7 +561,7 @@ class TINN(tf.Module):
             loss_value = regularised_loss_value + unregularised_loss_value
 
         if lambdas_state[0] > 0:
-            self._update_lambdas_(lambdas_state, regularisable_norms, trainables)
+            self._update_lambdas_(lambdas_state, regularisable_norms, regularisable_trainables)
 
         grads = tape.gradient(loss_value, trainables)
         if dummy_train:
@@ -762,11 +767,20 @@ class TINN(tf.Module):
             f"total regularised loss: {self.loss_reg_total:{self.print_precision}}"
         )
         # printer("")
+        start_index = 0
         for i, loss in enumerate(self.losses):
-            printer(f"{loss.name} -> \n" + self.CRLR_str(self.loss_values[i], loss.residual_ret_names))
+            printer(
+                f"{loss.name} -> \n"
+                + self.CRLR_str(self.loss_values[i], loss.residual_ret_names, start_index=start_index)
+            )
+            start_index += len(self.loss_values[i])
         # printer("")
         for i, loss in enumerate(self.no_input_losses):
-            printer(f"{loss.name} -> \n" + self.CRLR_str(self.loss_no_input_values[i], loss.residual_ret_names))
+            printer(
+                f"{loss.name} -> \n"
+                + self.CRLR_str(self.loss_no_input_values[i], loss.residual_ret_names, start_index=start_index)
+            )
+            start_index += len(self.loss_vloss_no_input_valuesalues[i])
         # printer("")
         if sample_regularisations:
             lambdas = [item.numpy() for item in self.lambdas]
@@ -782,7 +796,7 @@ class TINN(tf.Module):
                 if s != "":
                     printer(s)
 
-    def CRLR_str(self, t_vars, labels=None, title=""):
+    def CRLR_str(self, t_vars, labels=None, title="", start_index=0):
         s = ""
         CR = "\n"
         C = ""
@@ -791,7 +805,7 @@ class TINN(tf.Module):
         if len(t_vars) > 0:
             s += "".join(
                 [
-                    f"({i+1}) {title} {labels[i]}: {v:{self.print_precision}} {CR if (i+1)%3 == 0 else C}"
+                    f"({i+1+start_index}) {title} {labels[i]}: {v:{self.print_precision}} {CR if (i+1)%3 == 0 else C}"
                     for i, v in enumerate(t_vars)
                 ]
             )
@@ -836,6 +850,25 @@ class TINN(tf.Module):
 
         # Set the weights of the optimizer
         model.optimizer.set_weights(weight_values)
+        return model
+
+    @classmethod
+    def restore_no_optimizer(cls, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}.pkl", "rb") as f:
+            model = pickle.load(f)
+        # with open(f"{str(path)}_optimizer.pkl", "rb") as f:
+        #    weight_values = pickle.load(f)
+        with open(f"{str(path)}_optimizer_config.pkl", "rb") as f:
+            conf = pickle.load(f)
+
+        model.optimizer = keras.optimizers.Adam(learning_rate=5e-4).from_config(conf)
+        # obs = next(iter(ds.batch(2).take(1)))
+        # model.__train_step__(obs, [0], dummy_train=True)
+
+        # Set the weights of the optimizer
+        # model.optimizer.set_weights(weight_values)
         return model
 
 

@@ -976,6 +976,7 @@ def plot_result(
     param_names=None,
     start=0,
     end=-1,
+    skip=1,
     yscale="log",
     y_lims=None,
     figsize=(14, 5),
@@ -1002,14 +1003,14 @@ def plot_result(
     # _closing_commands_("training_accuracy")
     _ = plt.figure(figsize=figsize)
     plt.title("Total Loss")
-    plt.plot(results["loss_total"][start:end], label="Real")
-    plt.plot(results["loss_regularisd_total"][start:end], label="Regularisd")
+    plt.plot(results["loss_total"][start:end:skip], label="Real")
+    plt.plot(results["loss_regularisd_total"][start:end:skip], label="Regularisd")
     _closing_commands_("Total losses")
 
     for i, loss in enumerate(model.losses):
         _ = plt.figure(figsize=figsize)
         plt.title(loss.name)
-        ts = results[f"{loss.name}_values"][start:end, :]
+        ts = results[f"{loss.name}_values"][start:end:skip, :]
         for j in range(ts.shape[1]):
             plt.plot(ts[:, j], label=f"({j+1}) {loss.residual_ret_names[j]}")
         _closing_commands_("Losses")
@@ -1017,7 +1018,7 @@ def plot_result(
     for i, loss in enumerate(model.no_input_losses):
         _ = plt.figure(figsize=figsize)
         plt.title(loss.name)
-        ts = results[f"{loss.name}_values"][start:end, :]
+        ts = results[f"{loss.name}_values"][start:end:skip, :]
         for j in range(ts.shape[1]):
             plt.plot(ts[:, j], label=f"({j+1}) {loss.residual_ret_names[j]}")
         _closing_commands_("No input losses")
@@ -1025,7 +1026,7 @@ def plot_result(
     if "lambdas" in results.keys():
         _ = plt.figure(figsize=figsize)
         plt.title(r"$\lambda$")
-        ts = results["lambdas"][start:end, :]
+        ts = results["lambdas"][start:end:skip, :]
         for j in range(ts.shape[1]):
             plt.plot(ts[:, j], label=r"$\lambda_{" f"{j+1}" r"}$")
         _closing_commands_("Lambdas")
@@ -1033,7 +1034,7 @@ def plot_result(
     if "grads" in results.keys():
         _ = plt.figure(figsize=figsize)
         plt.title("Gradients")
-        ts = results["grads"][start:end, :]
+        ts = results["grads"][start:end:skip, :]
         for j in range(ts.shape[1]):
             plt.plot(ts[:, j], label=f"{j+1}")
         _closing_commands_("Gradients")
@@ -1042,7 +1043,7 @@ def plot_result(
         _ = plt.figure(figsize=figsize)
         plt.title(r"Estimated parameters")
         for name in param_names:
-            plt.plot(results[f"{name}"][start:end], label=f"{name}")
+            plt.plot(results[f"{name}"][start:end:skip], label=f"{name}")
         _closing_commands_("parameters")
 
 

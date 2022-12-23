@@ -30,23 +30,26 @@ class L_Inf(Norm):
 
 
 class Observation_Loss(Loss):
-    def __init__(self, regularise=True, input_dim: int = 3, print_precision=".5f", **kwargs):
+    def __init__(self, layers, residual_ret_names=None, regularise=True, print_precision=".5f", **kwargs):
         super().__init__(
             name="Observation_Loss",
             regularise=regularise,
-            residual_ret_num=2,
-            residual_ret_names=("obs u", "obs v"),
+            residual_ret_num=layers[-1],
+            residual_ret_names=tuple(["obs " + chr(ord("u") + i) for i in range(layers[-1])])
+            if residual_ret_names is None
+            else residual_ret_names,
             print_precision=print_precision,
             **kwargs,
         )
-        self.input_dim = input_dim
+        self.layers = layers
+        self.input_dim = layers[0]
 
     @tf.function
     def residual(self, pinn, x):
         output = pinn.net(x[:, : self.input_dim])
         y = x[:, self.input_dim :]
         diff = output - y
-        return (diff[:, 0], diff[:, 1])
+        return tuple([diff[:, i] for i in range(self.residual_ret_num)])
 
 
 class Derivatives_Loss(Loss):
@@ -340,104 +343,19 @@ class Koch_Meinhard(Loss):
         return (f_u, f_v)
 
 
-#  \frac{\partial u}{\partial t^*} =  (\partial_{x^* x^*} + \partial_{y^* y^*}) u
-#                                     + \rho^*_u \frac{u^2 v}{1 + \kappa_u u^2} - \mu^*_u u + 1
-#  \frac{\partial v}{\partial t^*} =  D (\partial_{x^* x^*} + \partial_{y^* y^*}) v
-#                                     - \rho^*_v \frac{u^2 v}{1 + \kappa_u u^2} + \sigma^*_v
-#
-#  t = t^*/ \sigma_u
-#  x = \sqrt{D_u/\sigma_u} x^*
-#  y = \sqrt{D_u/\sigma_u} y^*
-#  D = D_v / D_u
-#  \rho_u = \rho^*_u * \sigma_u
-#  \rho_v = \rho^*_v * \sigma_u
-#  \mu_u = \mu^*_u * \sigma_u
-#  \sigma_v = \sigma^*_v * \sigma_u
-#
-class Koch_Meinhard_Dim_1(Loss):
+class Koch_Meinhard_output_as_Der(Loss):
     def __init__(
         self,
-        D: PDE_Parameter,
-        sigma_v: PDE_Parameter,
-        mu_u: PDE_Parameter,
-        rho_u: PDE_Parameter,
-        rho_v: PDE_Parameter,
-        kappa_u: PDE_Parameter,
-        regularise=True,
-        print_precision=".5f",
-    ):
-        """Koch_Meinhard PDE loss
-
-        if the parameter is None, it becomes traiable with initial value set as init_vale,
-        otherwise, it will be a constant
-        alpha_u and alpha_v are scales that we use to normalise the u and v.
-        """
-
-        super().__init__(
-            name="Loss_Koch_Meinhard",
-            regularise=regularise,
-            residual_ret_num=2,
-            residual_ret_names=("res u", "res v"),
-            print_precision=print_precision,
-        )
-
-        self._trainables_ = ()
-
-        self.D = D.build()
-        self._trainables_ += D.trainable
-        self.sigma_v = sigma_v.build()
-        self._trainables_ += sigma_v.trainable
-        self.mu_u = mu_u.build()
-        self._trainables_ += mu_u.trainable
-        self.rho_u = rho_u.build()
-        self._trainables_ += rho_u.trainable
-        self.rho_v = rho_v.build()
-        self._trainables_ += rho_v.trainable
-        self.kappa_u = kappa_u.build()
-        self._trainables_ += kappa_u.trainable
-
-    @tf.function
-    def residual(self, pinn, x):
-
-        (_, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
-
-        D = self.D.get_value(x)
-        sigma_v = self.sigma_v.get_value(x)
-        mu_u = self.mu_u.get_value(x)
-        rho_u = self.rho_u.get_value(x)
-        rho_v = self.rho_v.get_value(x)
-        kappa_u = self.kappa_u.get_value(x)
-
-        f = u * u * v / (1.0 + kappa_u * u * u)
-        f_u = u_t - (u_xx + u_yy) - rho_u * f + mu_u * u - 1
-        f_v = v_t - D * (v_xx + v_yy) + rho_v * f - sigma_v
-
-        return (f_u, f_v)
-
-
-#  \frac{\partial u}{\partial t^*} =  (\partial_{xx} + \partial_{yy}) u
-#                                     + \rho^*_u \frac{u^2 v}{1 + \kappa_u u^2} - \mu^*_u u +  \sigma^*_u
-#  \frac{\partial v}{\partial t^*} =  D (\partial_{xx} + \partial_{yy}) v
-#                                     - \rho^*_v \frac{u^2 v}{1 + \kappa_u u^2} + \sigma^*_v
-#
-#  t = t^*/ D_u
-#  D = D_v / D_u
-#  \rho_u = \rho^*_u * D_u
-#  \rho_v = \rho^*_v * D_u
-#  \mu_u = \mu^*_u * D_u
-#  \sigma_u = \sigma^*_u * D_u
-#  \sigma_v = \sigma^*_v * D_u
-#
-class Koch_Meinhard_Dim_2(Loss):
-    def __init__(
-        self,
-        D: PDE_Parameter,
+        dtype,
+        D_u: PDE_Parameter,
+        D_v: PDE_Parameter,
         sigma_u: PDE_Parameter,
         sigma_v: PDE_Parameter,
         mu_u: PDE_Parameter,
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
+        outputs_correction_fact=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
         regularise=True,
         print_precision=".5f",
     ):
@@ -458,8 +376,10 @@ class Koch_Meinhard_Dim_2(Loss):
 
         self._trainables_ = ()
 
-        self.D = D.build()
-        self._trainables_ += D.trainable
+        self.D_u = D_u.build()
+        self._trainables_ += D_u.trainable
+        self.D_v = D_v.build()
+        self._trainables_ += D_v.trainable
         self.sigma_u = sigma_u.build()
         self._trainables_ += sigma_u.trainable
         self.sigma_v = sigma_v.build()
@@ -473,12 +393,25 @@ class Koch_Meinhard_Dim_2(Loss):
         self.kappa_u = kappa_u.build()
         self._trainables_ += kappa_u.trainable
 
+        assert len(outputs_correction_fact) == 8
+        self.outputs_correction_fact = [tf.constant(i, dtype=dtype) for i in outputs_correction_fact]
+
     @tf.function
     def residual(self, pinn, x):
+        outputs = pinn.net(x)
+        u, v, u_xx, u_yy, u_t, v_xx, v_yy, v_t = (
+            outputs[:, 0] * self.outputs_correction_fact[0],
+            outputs[:, 1] * self.outputs_correction_fact[1],
+            outputs[:, 2] * self.outputs_correction_fact[2],
+            outputs[:, 3] * self.outputs_correction_fact[3],
+            outputs[:, 4] * self.outputs_correction_fact[4],
+            outputs[:, 5] * self.outputs_correction_fact[5],
+            outputs[:, 6] * self.outputs_correction_fact[6],
+            outputs[:, 7] * self.outputs_correction_fact[7],
+        )
 
-        (_, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
-
-        D = self.D.get_value(x)
+        D_u = self.D_u.get_value(x)
+        D_v = self.D_v.get_value(x)
         sigma_u = self.sigma_u.get_value(x)
         sigma_v = self.sigma_v.get_value(x)
         mu_u = self.mu_u.get_value(x)
@@ -487,8 +420,208 @@ class Koch_Meinhard_Dim_2(Loss):
         kappa_u = self.kappa_u.get_value(x)
 
         f = u * u * v / (1.0 + kappa_u * u * u)
-        f_u = u_t - (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
-        f_v = v_t - D * (v_xx + v_yy) + rho_v * f - sigma_v
+        f_u = u_t - D_u * (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
+        f_v = v_t - D_v * (v_xx + v_yy) + rho_v * f - sigma_v
+
+        return (f_u, f_v)
+
+
+class Koch_Meinhard_Dimensionless_output_as_Der(Loss):
+    def __init__(
+        self,
+        dtype,
+        D: PDE_Parameter,
+        rho_u: PDE_Parameter,
+        rho_v: PDE_Parameter,
+        kappa_u: PDE_Parameter,
+        outputs_correction_fact=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """Koch_Meinhard PDE loss
+
+        if the parameter is None, it becomes traiable with initial value set as init_vale,
+        otherwise, it will be a constant
+        alpha_u and alpha_v are scales that we use to normalise the u and v.
+        """
+
+        super().__init__(
+            name="Loss_Koch_Meinhard",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
+        )
+
+        self._trainables_ = ()
+
+        self.D = D.build()
+        self._trainables_ += D.trainable
+        self.rho_u = rho_u.build()
+        self._trainables_ += rho_u.trainable
+        self.rho_v = rho_v.build()
+        self._trainables_ += rho_v.trainable
+        self.kappa_u = kappa_u.build()
+        self._trainables_ += kappa_u.trainable
+
+        assert len(outputs_correction_fact) == 8
+        self.outputs_correction_fact = [tf.constant(i, dtype=dtype) for i in outputs_correction_fact]
+
+    @tf.function
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
+        u, v, u_xx, u_yy, u_t, v_xx, v_yy, v_t = (
+            outputs[:, 0] * self.outputs_correction_fact[0],
+            outputs[:, 1] * self.outputs_correction_fact[1],
+            outputs[:, 2] * self.outputs_correction_fact[2],
+            outputs[:, 3] * self.outputs_correction_fact[3],
+            outputs[:, 4] * self.outputs_correction_fact[4],
+            outputs[:, 5] * self.outputs_correction_fact[5],
+            outputs[:, 6] * self.outputs_correction_fact[6],
+            outputs[:, 7] * self.outputs_correction_fact[7],
+        )
+
+        D = self.D.get_value(x)
+        rho_u = self.rho_u.get_value(x)
+        rho_v = self.rho_v.get_value(x)
+        kappa_u = self.kappa_u.get_value(x)
+
+        f = u * u * v / (1.0 + kappa_u * u * u)
+        f_u = u_t - (u_xx + u_yy) - rho_u * f + u - 1
+        f_v = v_t - D * (v_xx + v_yy) + rho_v * f - 1
+
+        return (f_u, f_v)
+
+
+class Koch_Meinhard_Dimensionless_steady_output_as_Der(Loss):
+    def __init__(
+        self,
+        dtype,
+        D: PDE_Parameter,
+        rho_u: PDE_Parameter,
+        rho_v: PDE_Parameter,
+        kappa_u: PDE_Parameter,
+        outputs_correction_fact=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """Koch_Meinhard PDE loss
+
+        if the parameter is None, it becomes traiable with initial value set as init_vale,
+        otherwise, it will be a constant
+        alpha_u and alpha_v are scales that we use to normalise the u and v.
+        """
+
+        super().__init__(
+            name="Loss_Koch_Meinhard",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
+        )
+
+        self._trainables_ = ()
+
+        self.D = D.build()
+        self._trainables_ += D.trainable
+        self.rho_u = rho_u.build()
+        self._trainables_ += rho_u.trainable
+        self.rho_v = rho_v.build()
+        self._trainables_ += rho_v.trainable
+        self.kappa_u = kappa_u.build()
+        self._trainables_ += kappa_u.trainable
+
+        assert len(outputs_correction_fact) == 6
+        self.outputs_correction_fact = [tf.constant(i, dtype=dtype) for i in outputs_correction_fact]
+
+    @tf.function
+    def residual(self, pinn, x):
+        outputs = pinn.net(x)
+        u, v, u_xx, u_yy, v_xx, v_yy = (
+            outputs[:, 0] * self.outputs_correction_fact[0],
+            outputs[:, 1] * self.outputs_correction_fact[1],
+            outputs[:, 2] * self.outputs_correction_fact[2],
+            outputs[:, 3] * self.outputs_correction_fact[3],
+            outputs[:, 4] * self.outputs_correction_fact[4],
+            outputs[:, 5] * self.outputs_correction_fact[5],
+        )
+
+        D = self.D.get_value(x)
+        rho_u = self.rho_u.get_value(x)
+        rho_v = self.rho_v.get_value(x)
+        kappa_u = self.kappa_u.get_value(x)
+
+        f = u * u * v / (1.0 + kappa_u * u * u)
+        f_u = -(u_xx + u_yy) - rho_u * f + u - 1
+        f_v = -D * (v_xx + v_yy) + rho_v * f - 1
+
+        return (f_u, f_v)
+
+
+# - $\frac{\partial u^*}{\partial t^*} =  (\partial_{x^* x^*} + \partial_{y^* y^*}) u^*
+# + \rho^*_u \frac{(u^*)^2 v^*}{1 + \kappa_u (u^*)^2} - u^* + 1$
+# - $\frac{\partial v^*}{\partial t^*} =  D (\partial_{x^* x^*} + \partial_{y^* y^*}) v^*
+# - \rho^*_v \frac{(u^*)^2 v^*}{1 + \kappa_u^* (u^*)^2} + 1$
+
+# - $  u = (\sigma_u/\mu_u) u^*$
+# - $  v = (\sigma_v/\mu_u) v^*$
+# - $  t = t^*/ \mu_u$
+# - $  x = \sqrt{\frac{D_u}{\mu_u}} x^*$
+# - $  y = \sqrt{\frac{D_u}{\mu_u}} y^*$
+# - $  D = \frac{D_v}{D_u}$
+# - $  \rho_u = (\frac{mu_u^3}{\sigma_u \sigma_v}) \rho^*_u$
+# - $  \rho_v = (\frac{mu_u^3}{\sigma_u^2}) \rho^*_v$
+# - $  \kappa_u = (\frac{mu_u^2}{\sigma_u^2}) \kappa_u^*$
+#
+class Koch_Meinhard_Dimensionless(Loss):
+    def __init__(
+        self,
+        D: PDE_Parameter,
+        rho_u: PDE_Parameter,
+        rho_v: PDE_Parameter,
+        kappa_u: PDE_Parameter,
+        regularise=True,
+        print_precision=".5f",
+    ):
+        """Koch_Meinhard PDE loss
+
+        if the parameter is None, it becomes traiable with initial value set as init_vale,
+        otherwise, it will be a constant
+        alpha_u and alpha_v are scales that we use to normalise the u and v.
+        """
+
+        super().__init__(
+            name="Loss_Koch_Meinhard",
+            regularise=regularise,
+            residual_ret_num=2,
+            residual_ret_names=("res u", "res v"),
+            print_precision=print_precision,
+        )
+
+        self._trainables_ = ()
+
+        self.D = D.build()
+        self._trainables_ += D.trainable
+        self.rho_u = rho_u.build()
+        self._trainables_ += rho_u.trainable
+        self.rho_v = rho_v.build()
+        self._trainables_ += rho_v.trainable
+        self.kappa_u = kappa_u.build()
+        self._trainables_ += kappa_u.trainable
+
+    @tf.function
+    def residual(self, pinn, x):
+
+        (_, u, u_t, u_xx, u_yy, v, v_t, v_xx, v_yy) = self.derivatives(pinn, x)
+
+        D = self.D.get_value(x)
+        rho_u = self.rho_u.get_value(x)
+        rho_v = self.rho_v.get_value(x)
+        kappa_u = self.kappa_u.get_value(x)
+
+        f = u * u * v / (1.0 + kappa_u * u * u)
+        f_u = u_t - (u_xx + u_yy) - rho_u * f + u - 1
+        f_v = v_t - D * (v_xx + v_yy) + rho_v * f - 1
 
         return (f_u, f_v)
 
