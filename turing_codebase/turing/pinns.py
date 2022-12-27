@@ -621,6 +621,7 @@ class TINN(tf.Module):
         regularise=True,
         regularise_interval=1,
         train_acc_metric=keras.metrics.MeanSquaredError(),
+        relative_mean_denominators=None,
         printer=default_printer,
         epoch_callback=None,
     ):
@@ -633,6 +634,9 @@ class TINN(tf.Module):
         if print_interval > 0:
             start_time = time.time()
         x_sizes = np.max(dataset.sizes)
+        #
+        if relative_mean_denominators is not None:
+            assert np.sum([loss.shape[0] for loss in self.loss_values]) == len(relative_mean_denominators)
         #
         dataset2 = dataset.cache().batch(batch_size)
         for epoch in range(epochs):
@@ -666,16 +670,17 @@ class TINN(tf.Module):
                 self.loss_reg_total += loss_reg_total_batch
                 if self.num_loss > 0:
                     loss_values_batch = np.array([item.numpy() for item in loss_values_batch])
+                    index = 0
                     for i, norms in enumerate(loss_values_batch):
-
+                        if relative_mean_denominators is not None:
+                            norms /= relative_mean_denominators[index : index + len(norms)]
+                            index += len(norms)
                         self.loss_values[i] += ws[i] * norms
+                        self.loss_total += np.sum(np.sum(norms))
+
                 if self.num_no_input_loss > 0:
                     loss_no_input_values_batch = np.array([item.numpy() for item in loss_no_input_values_batch])
                     self.loss_no_input_values += loss_no_input_values_batch
-
-                if self.num_loss > 0:
-                    self.loss_total += np.sum(np.sum(np.sum([np.sum(item) for item in loss_values_batch])))
-                if self.num_no_input_loss > 0:
                     self.loss_total += np.sum(np.sum([np.sum(item) for item in loss_no_input_values_batch]))
 
                 step += 1
@@ -692,6 +697,7 @@ class TINN(tf.Module):
                 printer("############################################")
                 printer("#               Early stop                 #")
                 printer("############################################")
+                self._cut_samples_(samples, epoch, sample_losses, sample_regularisations, sample_parameters)
                 return samples
             # end for epoch in range(epochs)
             # Reset training metrics at the end of each epoch
@@ -760,6 +766,28 @@ class TINN(tf.Module):
                 for param in loss.trainables():
                     samples[f"{param.name.split(':')[0]}"][epoch] = param.numpy()
 
+    def _cut_samples_(self, samples, epoch, sample_losses, sample_regularisations, sample_parameters):
+        samples["training_obs_accuracy"] = samples["training_obs_accuracy"][:epoch]
+        if sample_losses:
+            samples["loss_total"] = samples["loss_total"][:epoch]
+            samples["loss_regularisd_total"] = samples["loss_regularisd_total"][:epoch]
+            for i, loss in enumerate(self.losses):
+                samples[f"{loss.name}_values"] = samples[f"{loss.name}_values"][:, :epoch]
+            for i, loss in enumerate(self.no_input_losses):
+                samples[f"{loss.name}_values"] = samples[f"{loss.name}_values"][:, :epoch]
+
+        if sample_regularisations:
+            grads = np.array([item.numpy() for item in self.grad_norms])
+            samples["grads"] = samples["grads"][:, :epoch]
+
+        if sample_parameters:
+            for loss in self.losses:
+                for param in loss.trainables():
+                    samples[f"{param.name.split(':')[0]}"] = samples[f"{param.name.split(':')[0]}"][:epoch]
+            for loss in self.no_input_losses:
+                for param in loss.trainables():
+                    samples[f"{param.name.split(':')[0]}"] = samples[f"{param.name.split(':')[0]}"][:epoch]
+
     def _print_metrics_(self, sample_regularisations, sample_parameters, printer=default_printer):
         # printer(f"Training observations acc over epoch: {self.train_acc:{self.print_precision}}")
         printer(
@@ -769,11 +797,9 @@ class TINN(tf.Module):
         # printer("")
         start_index = 0
         for i, loss in enumerate(self.losses):
-            printer(
-                f"{loss.name} -> \n"
-                + self.CRLR_str(self.loss_values[i], loss.residual_ret_names, start_index=start_index)
-            )
-            start_index += len(self.loss_values[i])
+            values = self.loss_values[i]
+            printer(f"{loss.name} -> \n" + self.CRLR_str(values, loss.residual_ret_names, start_index=start_index))
+            start_index += len(values)
         # printer("")
         for i, loss in enumerate(self.no_input_losses):
             printer(

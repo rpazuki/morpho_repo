@@ -52,6 +52,36 @@ class Observation_Loss(Loss):
         return tuple([diff[:, i] for i in range(self.residual_ret_num)])
 
 
+class Scaled_Output_Loss(Loss):
+    def __init__(
+        self, dtype, layers, scales=None, residual_ret_names=None, regularise=True, print_precision=".5f", **kwargs
+    ):
+        super().__init__(
+            name="Observation_Loss",
+            regularise=regularise,
+            residual_ret_num=layers[-1],
+            residual_ret_names=tuple([" " + chr(ord("A") + i) for i in range(layers[-1])])
+            if residual_ret_names is None
+            else residual_ret_names,
+            print_precision=print_precision,
+            **kwargs,
+        )
+        self.layers = layers
+        self.input_dim = layers[0]
+        if scales is not None:
+            assert len(scales) == self.residual_ret_num
+            self.scales = [tf.constant(s, dtype=dtype) for s in scales]
+        else:
+            self.scales = [tf.constant(1.0, dtype=dtype) for _ in range(self.residual_ret_num)]
+
+    @tf.function
+    def residual(self, pinn, x):
+        output = pinn.net(x[:, : self.input_dim])
+        y = x[:, self.input_dim :]
+        # diff = output - y
+        return tuple([output[:, i] - self.scales[i] * y[:, i] for i in range(self.residual_ret_num)])
+
+
 class Derivatives_Loss(Loss):
     def __init__(self, dtype, Ds=[1.0, 1.0], regularise=True, input_dim: int = 3, print_precision=".5f", **kwargs):
         super().__init__(
@@ -355,7 +385,7 @@ class Koch_Meinhard_output_as_Der(Loss):
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
-        outputs_correction_fact=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        outputs_scales=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
         regularise=True,
         print_precision=".5f",
     ):
@@ -393,21 +423,21 @@ class Koch_Meinhard_output_as_Der(Loss):
         self.kappa_u = kappa_u.build()
         self._trainables_ += kappa_u.trainable
 
-        assert len(outputs_correction_fact) == 8
-        self.outputs_correction_fact = [tf.constant(i, dtype=dtype) for i in outputs_correction_fact]
+        assert len(outputs_scales) == 8
+        self.outputs_scales = [tf.constant(i, dtype=dtype) for i in outputs_scales]
 
     @tf.function
     def residual(self, pinn, x):
         outputs = pinn.net(x)
         u, v, u_xx, u_yy, u_t, v_xx, v_yy, v_t = (
-            outputs[:, 0] * self.outputs_correction_fact[0],
-            outputs[:, 1] * self.outputs_correction_fact[1],
-            outputs[:, 2] * self.outputs_correction_fact[2],
-            outputs[:, 3] * self.outputs_correction_fact[3],
-            outputs[:, 4] * self.outputs_correction_fact[4],
-            outputs[:, 5] * self.outputs_correction_fact[5],
-            outputs[:, 6] * self.outputs_correction_fact[6],
-            outputs[:, 7] * self.outputs_correction_fact[7],
+            outputs[:, 0] * self.outputs_scales[0],
+            outputs[:, 1] * self.outputs_scales[1],
+            outputs[:, 2] * self.outputs_scales[2],
+            outputs[:, 3] * self.outputs_scales[3],
+            outputs[:, 4] * self.outputs_scales[4],
+            outputs[:, 5] * self.outputs_scales[5],
+            outputs[:, 6] * self.outputs_scales[6],
+            outputs[:, 7] * self.outputs_scales[7],
         )
 
         D_u = self.D_u.get_value(x)
@@ -434,7 +464,7 @@ class Koch_Meinhard_Dimensionless_output_as_Der(Loss):
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
-        outputs_correction_fact=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        outputs_scales=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
         regularise=True,
         print_precision=".5f",
     ):
@@ -464,21 +494,21 @@ class Koch_Meinhard_Dimensionless_output_as_Der(Loss):
         self.kappa_u = kappa_u.build()
         self._trainables_ += kappa_u.trainable
 
-        assert len(outputs_correction_fact) == 8
-        self.outputs_correction_fact = [tf.constant(i, dtype=dtype) for i in outputs_correction_fact]
+        assert len(outputs_scales) == 8
+        self.outputs_scales = [tf.constant(i, dtype=dtype) for i in outputs_scales]
 
     @tf.function
     def residual(self, pinn, x):
         outputs = pinn.net(x)
         u, v, u_xx, u_yy, u_t, v_xx, v_yy, v_t = (
-            outputs[:, 0] * self.outputs_correction_fact[0],
-            outputs[:, 1] * self.outputs_correction_fact[1],
-            outputs[:, 2] * self.outputs_correction_fact[2],
-            outputs[:, 3] * self.outputs_correction_fact[3],
-            outputs[:, 4] * self.outputs_correction_fact[4],
-            outputs[:, 5] * self.outputs_correction_fact[5],
-            outputs[:, 6] * self.outputs_correction_fact[6],
-            outputs[:, 7] * self.outputs_correction_fact[7],
+            outputs[:, 0] * self.outputs_scales[0],
+            outputs[:, 1] * self.outputs_scales[1],
+            outputs[:, 2] * self.outputs_scales[2],
+            outputs[:, 3] * self.outputs_scales[3],
+            outputs[:, 4] * self.outputs_scales[4],
+            outputs[:, 5] * self.outputs_scales[5],
+            outputs[:, 6] * self.outputs_scales[6],
+            outputs[:, 7] * self.outputs_scales[7],
         )
 
         D = self.D.get_value(x)
@@ -501,7 +531,7 @@ class Koch_Meinhard_Dimensionless_steady_output_as_Der(Loss):
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
-        outputs_correction_fact=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        outputs_scales=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
         regularise=True,
         print_precision=".5f",
     ):
@@ -531,19 +561,19 @@ class Koch_Meinhard_Dimensionless_steady_output_as_Der(Loss):
         self.kappa_u = kappa_u.build()
         self._trainables_ += kappa_u.trainable
 
-        assert len(outputs_correction_fact) == 6
-        self.outputs_correction_fact = [tf.constant(i, dtype=dtype) for i in outputs_correction_fact]
+        assert len(outputs_scales) == 6
+        self.outputs_scales = [tf.constant(i, dtype=dtype) for i in outputs_scales]
 
     @tf.function
     def residual(self, pinn, x):
         outputs = pinn.net(x)
         u, v, u_xx, u_yy, v_xx, v_yy = (
-            outputs[:, 0] * self.outputs_correction_fact[0],
-            outputs[:, 1] * self.outputs_correction_fact[1],
-            outputs[:, 2] * self.outputs_correction_fact[2],
-            outputs[:, 3] * self.outputs_correction_fact[3],
-            outputs[:, 4] * self.outputs_correction_fact[4],
-            outputs[:, 5] * self.outputs_correction_fact[5],
+            outputs[:, 0] * self.outputs_scales[0],
+            outputs[:, 1] * self.outputs_scales[1],
+            outputs[:, 2] * self.outputs_scales[2],
+            outputs[:, 3] * self.outputs_scales[3],
+            outputs[:, 4] * self.outputs_scales[4],
+            outputs[:, 5] * self.outputs_scales[5],
         )
 
         D = self.D.get_value(x)

@@ -445,9 +445,9 @@ class TINN_Multiple_Sim_Dataset(TINN_Dataset):
             ls_obs_Y += [obs_Y]
             ls_pde_X += [pde_X]
             if pde_X is None:
-                lb, ub = lower_upper_bounds([obs_X])
+                lb, ub = lower_upper_bounds(obs_X)
             else:
-                lb, ub = lower_upper_bounds([np.concatenate([obs_X, pde_X], axis=0)])
+                lb, ub = lower_upper_bounds(np.concatenate([obs_X, pde_X], axis=0))
 
             for i, k in enumerate(param_names):
                 # the first three columns are x, y, t. So, the index starts from 3.
@@ -547,7 +547,19 @@ def minimize_parameters(
     return minimize(minimize_model_parameters, initial_tuple, method=method, tol=tol, **kwargs)
 
 
-def lower_upper_bounds(inputs_of_inputs):
+def lower_upper_bounds(inputs_2D):
+    """Find the lower and upper bounds of inputs
+
+    inputs_2D: a 2d ndarray that its maxs and mins are calcuated
+               along axis 0.
+    """
+
+    lb = np.amin(inputs_2D, 0)
+    ub = np.amax(inputs_2D, 0)
+    return lb, ub
+
+
+def lower_upper_bounds_old(inputs_of_inputs):
     """Find the lower and upper bounds of inputs
 
     inputs_of_inputs: a list of tensors that their axis one have the same number
@@ -697,13 +709,19 @@ def create_dataset(
             idx_boundary = list(range(boundary_data_size))
 
     # Lower/Upper bounds
-    lb, ub = lower_upper_bounds([np.c_[XX, YY, TT]])
+    lb, ub = lower_upper_bounds(np.c_[XX, YY, TT])
+    output_lb, output_ub = lower_upper_bounds(np.c_[UU, VV])
+    if derivatives is not None:
+        derivatives_u_lb, derivatives_u_ub = lower_upper_bounds(dd_us.T)
 
+        derivatives_v_lb, derivatives_v_ub = lower_upper_bounds(dd_vs.T)
     ret = {
         "obs_input": np.c_[XX[idx_data], YY[idx_data], TT[idx_data]],
         "obs_output": np.c_[UU[idx_data], VV[idx_data]],
         "lb": lb,
         "ub": ub,
+        "output_lb": output_lb,
+        "output_ub": output_ub,
         "idx_data": idx_data,
     }
     if pde_data_size is not None:
@@ -731,6 +749,10 @@ def create_dataset(
             **{
                 "der_u": dd_us[:, idx_data],
                 "der_v": dd_vs[:, idx_data],
+                "derivatives_u_lb": derivatives_u_lb,
+                "derivatives_u_ub": derivatives_u_ub,
+                "derivatives_v_lb": derivatives_v_lb,
+                "derivatives_v_ub": derivatives_v_ub,
             },
         }
 
@@ -825,7 +847,7 @@ def create_dataset_mask(
         idx_boundary = list(range(boundary_data_size))
 
     # Lower/Upper bounds
-    lb, ub = lower_upper_bounds([np.c_[XX, YY, TT]])
+    lb, ub = lower_upper_bounds(np.c_[XX, YY, TT])
 
     ret = {
         "obs_input": np.c_[XX[idx_data], YY[idx_data], TT[idx_data]],
@@ -899,7 +921,7 @@ def create_dataset_multi_nodes_mask(
         idx_pde = list(range(pde_data_size))
 
     # Lower/Upper bounds
-    lb, ub = lower_upper_bounds([np.c_[XX, YY, TT]])
+    lb, ub = lower_upper_bounds(np.c_[XX, YY, TT])
 
     ret = {
         "obs_input": np.c_[XX[idx_data], YY[idx_data], TT[idx_data]],
