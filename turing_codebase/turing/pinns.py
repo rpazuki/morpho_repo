@@ -5,7 +5,9 @@ import pathlib
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-from .utils import indices, TINN_Dataset
+from .utils import indices
+from .tf_utils import TINN_Dataset
+from .tf_utils import Loss_Grad_Type
 import pickle
 
 # from functools import reduce
@@ -218,7 +220,14 @@ class Res_NN(NN):
 
 class Loss(tf.Module):
     def __init__(
-        self, name, regularise=True, residual_ret_num=2, residual_ret_names="", print_precision=".5f", **kwargs
+        self,
+        name,
+        loss_grad_type: Loss_Grad_Type = Loss_Grad_Type.BOTH,
+        regularise=True,
+        residual_ret_num=2,
+        residual_ret_names="",
+        print_precision=".5f",
+        **kwargs,
     ):
         """Loss value that is calulated for the output of the pinn
 
@@ -235,6 +244,7 @@ class Loss(tf.Module):
             self.residual_ret_names = tuple(["" for _ in range(residual_ret_num)])
         else:
             self.residual_ret_names = residual_ret_names
+        self.loss_grad_type = loss_grad_type
         self.regularise = regularise
         self.__version__ = 0.1
 
@@ -896,6 +906,171 @@ class TINN(tf.Module):
         # Set the weights of the optimizer
         # model.optimizer.set_weights(weight_values)
         return model
+
+
+class TINN_Inverse(TINN):
+    def __init__(
+        self,
+        pinn: NN,
+        losses,
+        norm: Norm,
+        no_input_losses=[],
+        optimizer=keras.optimizers.Adam(learning_rate=5e-4),
+        alpha=0.5,
+        loss_penalty_power=2,
+        print_precision=".5f",
+        **kwargs,
+    ):
+
+        super().__init__(
+            pinn, losses, norm, no_input_losses, optimizer, alpha, loss_penalty_power, print_precision, **kwargs
+        )
+        # Make sure if any loss has trainable paremeters, their
+        # Loss_Grad_Type is set to PAREMETER of BOTH
+        for loss in losses:
+            if loss.loss_grad_type == Loss_Grad_Type.PINN and len(loss.trainables()) > 0:
+                raise ValueError(
+                    f"The loss {loss.name} has some trainable parameters, while"
+                    f" its loss_grad_type is 'PINN' (It should be 'PARAMETER' or 'BOTH')"
+                )
+
+    @tf.function
+    def __train_step__(self, elements, lambdas_state, dummy_train=False):
+        """_summary_
+
+        Args:
+            elements (_type_): _description_
+            lambdas_state ([int]): [0] == No Lambda
+                                   [1] == Update_Lambda start
+                                   [2] == Update_Lambda in Middle
+                                   [3] == Update_Lambda end
+            train_acc_metric (_type_): _description_
+            dummy_train (bool, optional): _description_. Defaults to False.
+
+        Returns:
+            _type_: _description_
+        """
+        flg_parameters_grad = False
+        with tf.GradientTape(persistent=True) as tape:
+
+            loss_items = [loss.residual(self.pinn, elements[index]) for index, loss in enumerate(self.losses)]
+            loss_items_norm = [self.norm.reduce_norm(item) for item in loss_items]
+
+            # trainables = self.pinn.trainable_variables
+            pinn_trainables = self.pinn.trainable_variables
+            param_trainables = ()
+            regularisable_trainables = self.pinn.trainable_variables
+            for loss in self.losses:
+                # trainables += loss.trainables()
+                param_trainables += loss.trainables()
+                if loss.regularise:
+                    regularisable_trainables += loss.trainables()
+            if len(self.no_input_losses) > 0:
+                no_input_loss_items = [loss.residual(self.pinn, None) for loss in self.no_input_losses]
+                no_input_loss_items_norm = [self.norm.reduce_norm(item) for item in no_input_loss_items]
+                for loss in self.no_input_losses:
+                    # trainables += loss.trainables()
+                    param_trainables += loss.trainables()
+                    if loss.regularise:
+                        regularisable_trainables += loss.trainables()
+            else:
+                no_input_loss_items = []
+                no_input_loss_items_norm = 0.0
+            #######################
+            pinn_regularisable_norms = [
+                loss_items_norm[i]
+                for i in self.regularisable_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PINN
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ] + [
+                no_input_loss_items_norm[i]
+                for i in self.regularisable_no_input_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PINN
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ]
+            if len(pinn_regularisable_norms) > 0:
+                pinn_regularisable_norms_c = tf.concat(pinn_regularisable_norms, axis=0)
+                pinn_regularised_loss_value = tf.reduce_sum(tf.stack(self.lambdas) * pinn_regularisable_norms_c)
+            else:
+                pinn_regularisable_norms = 0.0
+                pinn_regularised_loss_value = 0.0
+            #
+            param_regularisable_norms = [
+                loss_items_norm[i]
+                for i in self.regularisable_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PARAMETER
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ] + [
+                no_input_loss_items_norm[i]
+                for i in self.regularisable_no_input_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PARAMETER
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ]
+            if len(param_regularisable_norms) > 0:
+                param_regularisable_norms_c = tf.concat(param_regularisable_norms, axis=0)
+                param_regularised_loss_value = tf.reduce_sum(tf.stack(self.lambdas) * param_regularisable_norms_c)
+                flg_parameters_grad = True
+            else:
+                param_regularisable_norms = 0.0
+                param_regularised_loss_value = 0.0
+            ###########################
+            pinn_unregularisable_norms = [
+                loss_items_norm[i]
+                for i in self.unregularisable_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PINN
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ] + [
+                no_input_loss_items_norm[i]
+                for i in self.unregularisable_no_input_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PINN
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ]
+            if len(pinn_unregularisable_norms) > 0:
+                pinn_unregularisable_norms = tf.concat(pinn_unregularisable_norms, axis=0)
+                pinn_unregularised_loss_value = tf.reduce_sum(pinn_unregularisable_norms)
+            else:
+                pinn_unregularisable_norms = 0.0
+                pinn_unregularised_loss_value = 0.0
+            #
+            param_unregularisable_norms = [
+                loss_items_norm[i]
+                for i in self.unregularisable_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PARAMETER
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ] + [
+                no_input_loss_items_norm[i]
+                for i in self.unregularisable_no_input_loss_indices
+                if self.losses[i].loss_grad_type == Loss_Grad_Type.PARAMETER
+                or self.losses[i].loss_grad_type == Loss_Grad_Type.BOTH
+            ]
+            if len(param_unregularisable_norms) > 0:
+                param_unregularisable_norms = tf.concat(param_unregularisable_norms, axis=0)
+                param_unregularised_loss_value = tf.reduce_sum(param_unregularisable_norms)
+                flg_parameters_grad = True
+            else:
+                param_unregularisable_norms = 0.0
+                param_unregularised_loss_value = 0.0
+            ##############################
+            pinn_loss_value = pinn_regularised_loss_value + pinn_unregularised_loss_value
+            param_loss_value = param_regularised_loss_value + param_unregularised_loss_value
+            loss_value = pinn_loss_value + param_loss_value
+
+        if lambdas_state[0] > 0:
+            regularisable_norms = tf.concat(pinn_regularisable_norms + param_regularisable_norms, axis=0)
+            self._update_lambdas_(lambdas_state, regularisable_norms, regularisable_trainables)
+
+        pinn_grads = tape.gradient(pinn_loss_value, pinn_trainables)
+        if flg_parameters_grad:
+            param_grads = tape.gradient(param_loss_value, param_trainables)
+        if dummy_train:
+            # self.dummy_update_grads(trainables)
+            raise NotImplementedError
+        else:
+            self.optimizer.apply_gradients(zip(pinn_grads, pinn_trainables))
+            if flg_parameters_grad:
+                self.optimizer.apply_gradients(zip(param_grads, param_trainables))
+
+        return loss_value, loss_items_norm, no_input_loss_items_norm
 
 
 class TINNBackup(tf.Module):

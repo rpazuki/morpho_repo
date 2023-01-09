@@ -1,11 +1,12 @@
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-from .utils import Parameter_Type
-from .utils import PDE_Parameter
-from . import Loss
-from .utils import clip_by_value, clip_by_value_zero_lb
-from . import Norm
+from .tf_utils import Parameter_Type
+from .tf_utils import Loss_Grad_Type
+from .tf_utils import PDE_Parameter
+from .pinns import Loss
+from .tf_utils import clip_by_value, clip_by_value_zero_lb
+from .pinns import Norm
 
 
 class L2(Norm):
@@ -30,9 +31,18 @@ class L_Inf(Norm):
 
 
 class Observation_Loss(Loss):
-    def __init__(self, layers, residual_ret_names=None, regularise=True, print_precision=".5f", **kwargs):
+    def __init__(
+        self,
+        layers,
+        loss_grad_type=Loss_Grad_Type.PINN,
+        residual_ret_names=None,
+        regularise=True,
+        print_precision=".5f",
+        **kwargs,
+    ):
         super().__init__(
             name="Observation_Loss",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=layers[-1],
             residual_ret_names=tuple(["obs " + chr(ord("u") + i) for i in range(layers[-1])])
@@ -54,10 +64,19 @@ class Observation_Loss(Loss):
 
 class Scaled_Output_Loss(Loss):
     def __init__(
-        self, dtype, layers, scales=None, residual_ret_names=None, regularise=True, print_precision=".5f", **kwargs
+        self,
+        dtype,
+        layers,
+        scales=None,
+        loss_grad_type=Loss_Grad_Type.PINN,
+        residual_ret_names=None,
+        regularise=True,
+        print_precision=".5f",
+        **kwargs,
     ):
         super().__init__(
             name="Observation_Loss",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=layers[-1],
             residual_ret_names=tuple([" " + chr(ord("A") + i) for i in range(layers[-1])])
@@ -83,9 +102,19 @@ class Scaled_Output_Loss(Loss):
 
 
 class Derivatives_Loss(Loss):
-    def __init__(self, dtype, Ds=[1.0, 1.0], regularise=True, input_dim: int = 3, print_precision=".5f", **kwargs):
+    def __init__(
+        self,
+        dtype,
+        Ds=[1.0, 1.0],
+        loss_grad_type=Loss_Grad_Type.PINN,
+        regularise=True,
+        input_dim: int = 3,
+        print_precision=".5f",
+        **kwargs,
+    ):
         super().__init__(
             name="Derivatives_Loss",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=6,
             residual_ret_names=("u_xx", "u_yy", "u_t", "v_xx", "v_yy", "v_t"),
@@ -117,9 +146,19 @@ class Derivatives_Loss(Loss):
 
 
 class Observation_And_Derivatives_Loss(Loss):
-    def __init__(self, dtype, Ds=[1.0, 1.0], regularise=True, input_dim: int = 3, print_precision=".5f", **kwargs):
+    def __init__(
+        self,
+        dtype,
+        Ds=[1.0, 1.0],
+        loss_grad_type=Loss_Grad_Type.PINN,
+        regularise=True,
+        input_dim: int = 3,
+        print_precision=".5f",
+        **kwargs,
+    ):
         super().__init__(
             name="Derivatives_Loss",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=8,
             residual_ret_names=("obs u", "obs v", "u_xx", "u_yy", "u_t", "v_xx", "v_yy", "v_t"),
@@ -157,18 +196,22 @@ class Observation_And_Derivatives_Loss(Loss):
 class Periodic_Boundary_Condition(Loss):
     def __init__(
         self,
+        loss_grad_type=Loss_Grad_Type.PINN,
         regularise=True,
         input_dim=3,
         print_precision=".5f",
+        **kwargs,
     ):
         """ """
 
         super().__init__(
             name="Periodic_Boundary_Condition",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=1,
             residual_ret_names=("periodic boundary"),
             print_precision=print_precision,
+            **kwargs,
         )
         self.input_dim = input_dim
 
@@ -184,18 +227,22 @@ class Diffusion_point_Loss(Loss):
         self,
         Ds,
         dtype,
+        loss_grad_type=Loss_Grad_Type.PINN,
         regularise=True,
         input_dim: int = 3,
         print_precision=".5f",
+        **kwargs,
     ):
         """ """
 
         super().__init__(
             name="Diffusion_Point_Loss",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("diff u", "diff v"),
             print_precision=print_precision,
+            **kwargs,
         )
         self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
         self.input_dim = input_dim
@@ -226,17 +273,21 @@ class Diffusion_Loss(Loss):
         Ls,
         Ds,
         dtype,
+        loss_grad_type=Loss_Grad_Type.PINN,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         """ """
 
         super().__init__(
             name="Diffusion_Loss",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("diff u", "diff v"),
             print_precision=print_precision,
+            **kwargs,
         )
         self.dxdy = tf.constant(np.prod([ns[i] / Ls[i] for i in range(len(ns))]), dtype=dtype)
         self.Ds = [tf.constant(Ds[i], dtype=dtype) for i in range(len(Ds))]
@@ -260,9 +311,20 @@ class Diffusion_Loss(Loss):
 
 
 class Non_zero_params(Loss):
-    def __init__(self, loss_name, parameters, regularise=False, epsilon=1e-7, alpha=1, print_precision=".5f", **kwargs):
+    def __init__(
+        self,
+        loss_name,
+        parameters,
+        loss_grad_type=Loss_Grad_Type.PARAMETER,
+        regularise=False,
+        epsilon=1e-7,
+        alpha=1,
+        print_precision=".5f",
+        **kwargs,
+    ):
         super().__init__(
             name=f"non_zero_{loss_name}",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=len(parameters),
             print_precision=print_precision,
@@ -312,8 +374,10 @@ class Koch_Meinhard(Loss):
         kappa_u: PDE_Parameter,
         alpha_u=1.0,
         alpha_v=1.0,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         """Koch_Meinhard PDE loss
 
@@ -324,10 +388,12 @@ class Koch_Meinhard(Loss):
 
         super().__init__(
             name="Loss_Koch_Meinhard",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -386,8 +452,10 @@ class Koch_Meinhard_output_as_Der(Loss):
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
         outputs_scales=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         """Koch_Meinhard PDE loss
 
@@ -398,10 +466,12 @@ class Koch_Meinhard_output_as_Der(Loss):
 
         super().__init__(
             name="Loss_Koch_Meinhard",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -465,8 +535,10 @@ class Koch_Meinhard_Dimensionless_output_as_Der(Loss):
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
         outputs_scales=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         """Koch_Meinhard PDE loss
 
@@ -477,10 +549,12 @@ class Koch_Meinhard_Dimensionless_output_as_Der(Loss):
 
         super().__init__(
             name="Loss_Koch_Meinhard",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -532,8 +606,10 @@ class Koch_Meinhard_Dimensionless_steady_output_as_Der(Loss):
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
         outputs_scales=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         """Koch_Meinhard PDE loss
 
@@ -544,10 +620,12 @@ class Koch_Meinhard_Dimensionless_steady_output_as_Der(Loss):
 
         super().__init__(
             name="Loss_Koch_Meinhard",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -610,8 +688,10 @@ class Koch_Meinhard_Dimensionless(Loss):
         rho_u: PDE_Parameter,
         rho_v: PDE_Parameter,
         kappa_u: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         """Koch_Meinhard PDE loss
 
@@ -622,10 +702,12 @@ class Koch_Meinhard_Dimensionless(Loss):
 
         super().__init__(
             name="Loss_Koch_Meinhard",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -665,15 +747,19 @@ class Schnakenberg(Loss):
         c_1: PDE_Parameter,
         c_2: PDE_Parameter,
         c_3: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         super().__init__(
             name="Loss_Schnakenberg",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -717,15 +803,19 @@ class FitzHugh_Nagumo(Loss):
         gamma: PDE_Parameter,
         mu: PDE_Parameter,
         sigma: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         super().__init__(
             name="FitzHugh_Nagumo",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -769,15 +859,19 @@ class Brusselator(Loss):
         D_v: PDE_Parameter,
         A: PDE_Parameter,
         B: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         super().__init__(
             name="Brusselator",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=2,
             residual_ret_names=("res u", "res v"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -841,16 +935,20 @@ class Circuit2_variant5716(Loss):
         nfe: PDE_Parameter,
         neb: PDE_Parameter,
         nee: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
         masked=False,
+        **kwargs,
     ):
         super().__init__(
             name="Circuit2_variant5716",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=6,
             residual_ret_names=("res A", "res B", "res C", "res D", "res E", "res F"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -987,15 +1085,19 @@ class Circuit3954(Loss):
         K_aTc: PDE_Parameter,
         n: PDE_Parameter,
         n_aTc: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         super().__init__(
             name="Circuit2_variant5716",
+            loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=9,
             residual_ret_names=("res U", "res V", "res A", "res B", "res C", "res D", "res E", "res F", "res aTc"),
             print_precision=print_precision,
+            **kwargs,
         )
 
         self._trainables_ = ()
@@ -1117,11 +1219,26 @@ class Koch_Meinhard_steady(Koch_Meinhard):
         kappa_u: PDE_Parameter,
         alpha_u=1.0,
         alpha_v=1.0,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
         super().__init__(
-            D_u, D_v, sigma_u, sigma_v, mu_u, rho_u, rho_v, kappa_u, alpha_u, alpha_v, regularise, print_precision
+            D_u,
+            D_v,
+            sigma_u,
+            sigma_v,
+            mu_u,
+            rho_u,
+            rho_v,
+            kappa_u,
+            alpha_u,
+            alpha_v,
+            loss_grad_type,
+            regularise,
+            print_precision,
+            **kwargs,
         )
 
     @tf.function
@@ -1153,10 +1270,23 @@ class Schnakenberg_steady(Schnakenberg):
         c_1: PDE_Parameter,
         c_2: PDE_Parameter,
         c_3: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
-        super().__init__(D_u, D_v, c_0, c_1, c_2, c_3, regularise, print_precision)
+        super().__init__(
+            D_u,
+            D_v,
+            c_0,
+            c_1,
+            c_2,
+            c_3,
+            loss_grad_type,
+            regularise,
+            print_precision,
+            **kwargs,
+        )
 
     @tf.function
     def residual(self, pinn, x):
@@ -1185,10 +1315,23 @@ class FitzHugh_Nagumo_steady(FitzHugh_Nagumo):
         gamma: PDE_Parameter,
         mu: PDE_Parameter,
         sigma: PDE_Parameter,
+        loss_grad_type=Loss_Grad_Type.BOTH,
         regularise=True,
         print_precision=".5f",
+        **kwargs,
     ):
-        super().__init__(D_u, D_v, b, gamma, mu, sigma, regularise, print_precision)
+        super().__init__(
+            D_u,
+            D_v,
+            b,
+            gamma,
+            mu,
+            sigma,
+            loss_grad_type,
+            regularise,
+            print_precision,
+            **kwargs,
+        )
 
     @tf.function
     def residual(self, pinn, x):

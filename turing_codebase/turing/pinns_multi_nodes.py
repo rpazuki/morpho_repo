@@ -5,7 +5,8 @@ import pickle
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-from .utils import indices, TINN_Dataset
+from .utils import indices
+from .tf_utils import TINN_Dataset
 from .pinns import NN, Loss, Norm
 
 
