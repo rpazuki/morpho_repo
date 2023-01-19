@@ -3,6 +3,7 @@ from itertools import cycle, zip_longest
 import os
 import pathlib
 import pickle
+from re import A
 import warnings
 from collections.abc import Iterable
 import tensorflow as tf
@@ -32,25 +33,28 @@ class Loss_Grad_Type(Enum):
 
 
 class PDE_Parameter:
-    def __init__(self, name, parameter_type: Parameter_Type, value=1.0, index=-1, dtype=tf.float32, zero_lb=False):
+    def __init__(
+        self,
+        name,
+        parameter_type: Parameter_Type,
+        value=1.0,
+        index=-1,
+        dtype=tf.float32,
+        clip_constraint=clip_by_value,
+    ):
         self.name = name
         self.parameter_type = parameter_type
         self.dtype = dtype
         self.value = value
         self.index = index
-        self.zero_lb = zero_lb
+        self.clip_constraint = clip_constraint
         self.trainable = ()
 
     def build(self):
         if self.parameter_type == Parameter_Type.CONSTANT:
             self.tf_var = tf.constant(self.value, dtype=self.dtype, name=self.name)
         elif self.parameter_type == Parameter_Type.VARIABLE:
-            if self.zero_lb:
-                self.tf_var = tf.Variable(
-                    [self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value_zero_lb
-                )
-            else:
-                self.tf_var = tf.Variable([self.value], dtype=self.dtype, name=self.name, constraint=clip_by_value)
+            self.tf_var = tf.Variable([self.value], dtype=self.dtype, name=self.name, constraint=self.clip_constraint)
             self.trainable = (self.tf_var,)
         else:  # INPUT
             self.tf_var = None

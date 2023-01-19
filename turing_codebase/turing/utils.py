@@ -81,6 +81,26 @@ def second_order_derivatives(n, c):
     return dc_xx, dc_yy
 
 
+def first_order_derivatives(n, c, forward=True):
+    dc_x = np.zeros_like(c)
+    dc_y = np.zeros_like(c)
+    for i in range(n[0]):
+        for j in range(n[1]):
+            # Periodic boundary condition
+            i_prev = (i - 1) % n[0]
+            i_next = (i + 1) % n[0]
+
+            j_prev = (j - 1) % n[1]
+            j_next = (j + 1) % n[1]
+            if forward:
+                dc_x[i, j] = c[i_next, j] - c[i, j]
+                dc_y[i, j] = c[i, j_next] - c[i, j]
+            else:
+                dc_x[i, j] = c[i_prev, j] - c[i, j]
+                dc_y[i, j] = c[i, j_prev] - c[i, j]
+    return dc_x, dc_y
+
+
 def lower_upper_bounds(inputs_2D):
     """Find the lower and upper bounds of inputs
 

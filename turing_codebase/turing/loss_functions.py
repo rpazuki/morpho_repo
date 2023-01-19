@@ -59,6 +59,7 @@ class Observation_Loss(Loss):
         output = pinn.net(x[:, : self.input_dim])
         y = x[:, self.input_dim :]
         diff = output - y
+        # return tuple([diff[:, i] / tf.math.reduce_std(output[:, i]) for i in range(self.residual_ret_num)])
         return tuple([diff[:, i] for i in range(self.residual_ret_num)])
 
 
@@ -98,7 +99,13 @@ class Scaled_Output_Loss(Loss):
         output = pinn.net(x[:, : self.input_dim])
         y = x[:, self.input_dim :]
         # diff = output - y
-        return tuple([output[:, i] - self.scales[i] * y[:, i] for i in range(self.residual_ret_num)])
+        # return tuple(
+        #     [
+        #         (output[:, i] - self.scales[i] * y[:, i]) / tf.math.reduce_std(output[:, i])
+        #         for i in range(self.residual_ret_num)
+        #     ]
+        # )
+        return tuple([(output[:, i] - self.scales[i] * y[:, i]) for i in range(self.residual_ret_num)])
 
 
 class Derivatives_Loss(Loss):
@@ -136,12 +143,12 @@ class Derivatives_Loss(Loss):
         v_t_obs = x[:, self.input_dim + 5 : self.input_dim + 6]
 
         return (
-            self.Ds[0] * u_xx - u_xx_obs,
-            self.Ds[0] * u_yy - u_yy_obs,
-            u_t - u_t_obs,
-            self.Ds[1] * v_xx - v_xx_obs,
-            self.Ds[1] * v_yy - v_yy_obs,
-            v_t - v_t_obs,
+            (self.Ds[0] * u_xx - u_xx_obs),  # / tf.math.reduce_std(u_xx_obs),
+            (self.Ds[0] * u_yy - u_yy_obs),  # / tf.math.reduce_std(u_yy_obs),
+            (u_t - u_t_obs),  # /tf.math.reduce_std(u_t_obs),
+            (self.Ds[1] * v_xx - v_xx_obs),  # / tf.math.reduce_std(v_xx_obs),
+            (self.Ds[1] * v_yy - v_yy_obs),  # / tf.math.reduce_std(v_yy_obs),
+            (v_t - v_t_obs),  # /tf.math.reduce_std(v_t_obs),
         )
 
 
@@ -209,7 +216,7 @@ class Periodic_Boundary_Condition(Loss):
             loss_grad_type=loss_grad_type,
             regularise=regularise,
             residual_ret_num=1,
-            residual_ret_names=("periodic boundary"),
+            residual_ret_names=("periodic boundary",),
             print_precision=print_precision,
             **kwargs,
         )
@@ -436,6 +443,7 @@ class Koch_Meinhard(Loss):
         f_u = u_t - D_u * (u_xx + u_yy) - rho_u * f + mu_u * u - sigma_u
         f_v = v_t - D_v * (v_xx + v_yy) + rho_v * f - sigma_v
 
+        # return (f_u / tf.math.reduce_std(f_u), f_v / tf.math.reduce_std(f_v))
         return (f_u, f_v)
 
 
