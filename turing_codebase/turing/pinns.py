@@ -993,7 +993,7 @@ class TINN_Inverse(TINN):
                 pinn_regularised_loss_value = tf.reduce_sum(tf.stack(self.lambdas) * pinn_regularisable_norms_c)
             else:
                 pinn_regularisable_norms = 0.0
-                pinn_regularised_loss_value = 0.0
+                pinn_regularised_loss_value = tf.constant(0.0, dtype=self.pinn.dtype)
             #
             param_regularisable_norms = [
                 loss_items_norm[i]
@@ -1012,7 +1012,7 @@ class TINN_Inverse(TINN):
                 flg_parameters_grad = True
             else:
                 param_regularisable_norms = 0.0
-                param_regularised_loss_value = 0.0
+                param_regularised_loss_value = tf.constant(0.0, dtype=self.pinn.dtype)
             ###########################
             pinn_unregularisable_norms = [
                 loss_items_norm[i]
@@ -1030,7 +1030,7 @@ class TINN_Inverse(TINN):
                 pinn_unregularised_loss_value = tf.reduce_sum(pinn_unregularisable_norms)
             else:
                 pinn_unregularisable_norms = 0.0
-                pinn_unregularised_loss_value = 0.0
+                pinn_unregularised_loss_value = tf.constant(0.0, dtype=self.pinn.dtype)
             #
             param_unregularisable_norms = [
                 loss_items_norm[i]
@@ -1049,14 +1049,17 @@ class TINN_Inverse(TINN):
                 flg_parameters_grad = True
             else:
                 param_unregularisable_norms = 0.0
-                param_unregularised_loss_value = 0.0
+                param_unregularised_loss_value = tf.constant(0.0, dtype=self.pinn.dtype)
             ##############################
             pinn_loss_value = pinn_regularised_loss_value + pinn_unregularised_loss_value
             param_loss_value = param_regularised_loss_value + param_unregularised_loss_value
             loss_value = pinn_loss_value + param_loss_value
 
         if lambdas_state[0] > 0:
-            regularisable_norms = tf.concat(pinn_regularisable_norms + param_regularisable_norms, axis=0)
+            if param_regularisable_norms == 0.0:
+                regularisable_norms = tf.concat(pinn_regularisable_norms, axis=0)
+            else:
+                regularisable_norms = tf.concat(pinn_regularisable_norms + param_regularisable_norms, axis=0)
             self._update_lambdas_(lambdas_state, regularisable_norms, regularisable_trainables)
 
         pinn_grads = tape.gradient(pinn_loss_value, pinn_trainables)
@@ -1066,7 +1069,8 @@ class TINN_Inverse(TINN):
             # self.dummy_update_grads(trainables)
             raise NotImplementedError
         else:
-            self.optimizer.apply_gradients(zip(pinn_grads, pinn_trainables))
+            if pinn_regularisable_norms > 0 or pinn_unregularisable_norms > 0:
+                self.optimizer.apply_gradients(zip(pinn_grads, pinn_trainables))
             if flg_parameters_grad:
                 self.optimizer.apply_gradients(zip(param_grads, param_trainables))
 
