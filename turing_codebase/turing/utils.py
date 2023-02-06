@@ -190,7 +190,8 @@ def create_dataset(
     x_domain = L * np.linspace(0, 1, x_size)
     y_domain = L * np.linspace(0, 1, y_size)
 
-    X, Y = np.meshgrid(x_domain, y_domain, sparse=False, indexing="ij")
+    # X, Y = np.meshgrid(x_domain, y_domain, sparse=False, indexing="ij")
+    Y, X = np.meshgrid(x_domain, y_domain, sparse=False, indexing="ij")
     XX = np.tile(X.flatten(), T)  # N x T
     YY = np.tile(Y.flatten(), T)  # N x T
     TT = np.repeat(t_star[-T:], N)  # T x N

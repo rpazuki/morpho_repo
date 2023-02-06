@@ -18,8 +18,63 @@ def default_printer(s):
     print(s)
 
 
-class NN(tf.Module):
-    def __init__(self, layers, lb, ub, dtype=tf.float32, **kwargs):
+def np_sum(x):
+    return np.sum(x)
+
+
+def train(
+    epochs,
+    batch_size,
+    dataset: TINN_Dataset,
+    train_step,
+    train_step_returns_num,
+    print_interval=10,
+    loss_sample_interval=1,
+    stop_threshold=0,
+    loss_reduce=np_sum,
+    print_callback=None,
+    printer=default_printer,
+    epoch_callback=None,
+):
+    if print_interval > 0:
+        start_time = time.time()
+    loss_samples = np.zeros((epochs, train_step_returns_num))
+    dataset2 = dataset.cache().batch(batch_size)
+    index = 0
+    for epoch in range(epochs):
+        if print_interval > 0 and epoch % print_interval == 0:
+            printer(f"\nStart of epoch {epoch:d}")
+
+        # Iterate over the batches of the dataset.
+        for element in dataset2:
+            loss = train_step(element)
+            if epoch % loss_sample_interval == 0:
+                loss_samples[index, :] += loss
+        if epoch_callback is not None:
+            epoch_callback(epoch, loss_samples, index)
+        # Display metrics at the end of each epoch.
+        if print_interval > 0 and epoch % print_interval == 0:
+            if print_callback is None:
+                printer(f"Loss value: {loss_reduce(loss_samples[index, :])}, at epoch {epoch:d}")
+            else:
+                print_callback(printer, loss_samples[index, :], epoch)
+        if epoch % loss_sample_interval == 0 and stop_threshold >= float(loss_reduce(loss_samples[index, :])):
+            printer("############################################")
+            printer(f"#       Early stop at {epoch}             ")
+            printer("############################################")
+            return loss_samples[:index, :]
+        ###########################################
+        if print_interval > 0 and epoch % print_interval == 0:
+            printer(f"Time taken: {(time.time() - start_time):.2f}s")
+            start_time = time.time()
+        if epoch % loss_sample_interval == 0:
+            index += 1
+
+    return loss_samples[:index, :]
+
+
+class NN_base(tf.Module):
+    def __init__(self, dtype=tf.float32, **kwargs):
         """A dense Neural Net that is specified by layers argument.
 
         layers: input, dense layers and outputs dimensions
@@ -27,12 +82,124 @@ class NN(tf.Module):
         ub    : An array of maximums of inputs (upper bounds)
         """
         super().__init__(**kwargs)
+        self.dtype = dtype
+        self.__version__ = 0.1
+
+    def build(self):
+        pass
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+    def save(self, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # tf.saved_model.save(self, str(path))
+        #
+        # import os
+        # if not pathlib.Path(path.joinpath(name)).exists():
+        #   os.makedirs(path.joinpath(name))
+        with open(f"{str(path)}.pkl", "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def restore(cls, path_dir, name):
+        path = pathlib.PurePath(path_dir).joinpath(name)
+        # asset = tf.saved_model.load(str(path))
+        with open(f"{str(path)}.pkl", "rb") as f:
+            model = pickle.load(f)
+        return model
+
+
+class NN_Field(NN_base):
+    def __init__(self, x_range, y_range, layers, dim_2d, dtype=tf.float32, **kwargs):
+        """A dense Neural Net that is specified by layers argument.
+
+        layers: input, dense layers and outputs dimensions
+        lb    : An array of minimums of inputs (lower bounds)
+        ub    : An array of maximums of inputs (upper bounds)
+        """
+        super().__init__(dtype, **kwargs)
+        self.layers = layers
+        self.dim_2d = dim_2d
+        x = tf.constant(x_range, dtype=dtype)
+        y = tf.constant(y_range, dtype=dtype)
+        # The order of the Y and X must be reversed,
+        # since the chnages the value finds the derivatives
+        Y, X = tf.meshgrid(x, y)
+        self.X = X
+        self.Y = Y
+        self.domain_shape = X.shape
+        self.build()
+
+    def make_variables(self, k, initializer):
+        return tf.Variable(initializer(shape=k, dtype=self.dtype))
+
+    def build(self):
+        """Create the state of the layers (weights)"""
+        self.weights = []
+        self.scales = []
+        self.biases = []
+
+        for i, (input_n, output_n) in enumerate(zip(self.layers[:-1], self.layers[1:])):
+            rnd_init = tf.random_normal_initializer(stddev=1 / (input_n + output_n))
+            W = tf.Variable(self.make_variables([output_n, input_n], rnd_init), dtype=self.dtype, name=f"W{i+1}")
+            a = tf.Variable(tf.ones([1, 1, 1, output_n], dtype=self.dtype), dtype=self.dtype, name=f"a{i+1}")
+            b = tf.Variable(tf.zeros([1, 1, 1, output_n], dtype=self.dtype), dtype=self.dtype, name=f"b{i+1}")
+            self.weights.append(W)
+            self.scales.append(a)
+            self.biases.append(b)
+
+    def make_inputs(self, ts):
+        T = ts[tf.newaxis, tf.newaxis, :] * tf.ones(self.X.shape)[:, :, tf.newaxis]
+        # H will be a tensor (batches, m, n, 3)
+        # where batches is the len of ts,
+        #       m,n are the width and hieght of the domain
+        #       and 3 is for x,y,t
+        H = tf.concat(
+            [
+                tf.concat(
+                    [
+                        self.X[tf.newaxis, :, :, tf.newaxis],
+                        self.Y[tf.newaxis, :, :, tf.newaxis],
+                        T[:, :, i : i + 1][tf.newaxis, :, :, :],
+                    ],
+                    axis=3,
+                )
+                for i in range(T.shape[-1])
+            ],
+            axis=0,
+        )
+
+        return H
+
+    @tf.function
+    def net(self, H):
+        def act(x):
+            return x * tf.sigmoid(x)
+
+        for W, a, b in zip(self.weights, self.scales, self.biases):
+            mul_outputs = tf.tensordot(H, W, axes=[[-1], [-1]])
+            outputs = a * mul_outputs + b
+            # H = tf.tanh(outputs)
+            # H = tf.sigmoid(outputs)
+            H = act(outputs)
+
+        return outputs
+
+
+class NN(NN_base):
+    def __init__(self, layers, lb, ub, dtype=tf.float32, **kwargs):
+        """A dense Neural Net that is specified by layers argument.
+
+        layers: input, dense layers and outputs dimensions
+        lb    : An array of minimums of inputs (lower bounds)
+        ub    : An array of maximums of inputs (upper bounds)
+        """
+        super().__init__(dtype, **kwargs)
         self.layers = layers
         self.num_layers = len(self.layers)
         self.lb = lb
         self.ub = ub
-        self.dtype = dtype
-        self.__version__ = 0.1
         self.build()
 
     def build(self):
@@ -129,27 +296,6 @@ class NN(tf.Module):
         """
         partials = [tape.gradient(outputs[i], inputs) for i in range(len(outputs))]
         return partials
-
-    def copy(self):
-        return copy.deepcopy(self)
-
-    def save(self, path_dir, name):
-        path = pathlib.PurePath(path_dir).joinpath(name)
-        # tf.saved_model.save(self, str(path))
-        #
-        # import os
-        # if not pathlib.Path(path.joinpath(name)).exists():
-        #   os.makedirs(path.joinpath(name))
-        with open(f"{str(path)}.pkl", "wb") as f:
-            pickle.dump(self, f)
-
-    @classmethod
-    def restore(cls, path_dir, name):
-        path = pathlib.PurePath(path_dir).joinpath(name)
-        # asset = tf.saved_model.load(str(path))
-        with open(f"{str(path)}.pkl", "rb") as f:
-            model = pickle.load(f)
-        return model
 
 
 class NN2(NN):
@@ -951,6 +1097,7 @@ class TINN_Inverse(TINN):
             _type_: _description_
         """
         flg_parameters_grad = False
+        flg_pinn_grad = False
         with tf.GradientTape(persistent=True) as tape:
 
             loss_items = [loss.residual(self.pinn, elements[index]) for index, loss in enumerate(self.losses)]
@@ -991,6 +1138,7 @@ class TINN_Inverse(TINN):
             if len(pinn_regularisable_norms) > 0:
                 pinn_regularisable_norms_c = tf.concat(pinn_regularisable_norms, axis=0)
                 pinn_regularised_loss_value = tf.reduce_sum(tf.stack(self.lambdas) * pinn_regularisable_norms_c)
+                flg_pinn_grad = True
             else:
                 pinn_regularisable_norms = 0.0
                 pinn_regularised_loss_value = tf.constant(0.0, dtype=self.pinn.dtype)
@@ -1028,6 +1176,7 @@ class TINN_Inverse(TINN):
             if len(pinn_unregularisable_norms) > 0:
                 pinn_unregularisable_norms = tf.concat(pinn_unregularisable_norms, axis=0)
                 pinn_unregularised_loss_value = tf.reduce_sum(pinn_unregularisable_norms)
+                flg_pinn_grad = True
             else:
                 pinn_unregularisable_norms = 0.0
                 pinn_unregularised_loss_value = tf.constant(0.0, dtype=self.pinn.dtype)
@@ -1069,9 +1218,11 @@ class TINN_Inverse(TINN):
             # self.dummy_update_grads(trainables)
             raise NotImplementedError
         else:
-            if pinn_regularisable_norms > 0 or pinn_unregularisable_norms > 0:
+            if flg_pinn_grad:
+                print("Pinn will be updated")
                 self.optimizer.apply_gradients(zip(pinn_grads, pinn_trainables))
             if flg_parameters_grad:
+                print("Params will be updated")
                 self.optimizer.apply_gradients(zip(param_grads, param_trainables))
 
         return loss_value, loss_items_norm, no_input_loss_items_norm
