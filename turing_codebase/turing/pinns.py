@@ -115,8 +115,6 @@ class NN_Field(NN_base):
         """A dense Neural Net that is specified by layers argument.
 
         layers: input, dense layers and outputs dimensions
-        lb    : An array of minimums of inputs (lower bounds)
-        ub    : An array of maximums of inputs (upper bounds)
         """
         super().__init__(dtype, **kwargs)
         self.layers = layers
@@ -131,7 +129,7 @@ class NN_Field(NN_base):
         self.domain_shape = X.shape
         self.build()
 
-    def make_variables(self, k, initializer):
+    def __make_variables__(self, k, initializer):
         return tf.Variable(initializer(shape=k, dtype=self.dtype))
 
     def build(self):
@@ -142,7 +140,7 @@ class NN_Field(NN_base):
 
         for i, (input_n, output_n) in enumerate(zip(self.layers[:-1], self.layers[1:])):
             rnd_init = tf.random_normal_initializer(stddev=1 / (input_n + output_n))
-            W = tf.Variable(self.make_variables([output_n, input_n], rnd_init), dtype=self.dtype, name=f"W{i+1}")
+            W = tf.Variable(self.__make_variables__([output_n, input_n], rnd_init), dtype=self.dtype, name=f"W{i+1}")
             a = tf.Variable(tf.ones([1, 1, 1, output_n], dtype=self.dtype), dtype=self.dtype, name=f"a{i+1}")
             b = tf.Variable(tf.zeros([1, 1, 1, output_n], dtype=self.dtype), dtype=self.dtype, name=f"b{i+1}")
             self.weights.append(W)
@@ -172,17 +170,56 @@ class NN_Field(NN_base):
 
         return H
 
+    def act(self, x):
+        return x * tf.sigmoid(x)
+
     @tf.function
     def net(self, H):
-        def act(x):
-            return x * tf.sigmoid(x)
 
         for W, a, b in zip(self.weights, self.scales, self.biases):
             mul_outputs = tf.tensordot(H, W, axes=[[-1], [-1]])
             outputs = a * mul_outputs + b
             # H = tf.tanh(outputs)
             # H = tf.sigmoid(outputs)
-            H = act(outputs)
+            H = self.act(outputs)
+
+        return outputs
+
+
+class NN_Field_Deep(NN_Field):
+    def build(self):
+        """Create the state of the layers (weights)"""
+        self.weights = []
+        self.scales = []
+        self.biases = []
+
+        for i, (input_n, output_n) in enumerate(zip(self.layers[:-1], self.layers[1:])):
+            rnd_init = tf.random_normal_initializer(stddev=1 / (input_n + output_n))
+            W = tf.Variable(
+                self.__make_variables__([1, self.dim_2d[0], self.dim_2d[1], input_n, output_n], rnd_init),
+                dtype=self.dtype,
+                name=f"W{i+1}",
+            )
+            a = tf.Variable(
+                tf.ones([1, self.dim_2d[0], self.dim_2d[1], output_n], dtype=self.dtype),
+                dtype=self.dtype,
+                name=f"a{i+1}",
+            )
+            b = tf.Variable(
+                tf.zeros([1, self.dim_2d[0], self.dim_2d[1], output_n], dtype=self.dtype),
+                dtype=self.dtype,
+                name=f"b{i+1}",
+            )
+            self.weights.append(W)
+            self.scales.append(a)
+            self.biases.append(b)
+
+    def net(self, H):
+        for W, a, b in zip(self.weights, self.scales, self.biases):
+            mul_outputs = [tf.reduce_sum(H * W[:, :, :, :, i], axis=-1) for i in range(W.shape[-1])]
+            mul_outputs = tf.concat([mo[:, :, :, tf.newaxis] for mo in mul_outputs], axis=-1)
+            outputs = a * mul_outputs + b
+            H = self.act(outputs)
 
         return outputs
 
