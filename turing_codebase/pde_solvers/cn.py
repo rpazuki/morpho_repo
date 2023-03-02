@@ -255,10 +255,9 @@ class RD_1D_2nd_Order(Reaction_Diffusion_1D):
 
 #################################################################
 #   2D
-
-
 def Crank_Nicolson_Euler_Forward_2D_A(rx, ry, Ix, Jy):
     size = Ix * Jy + Ix + Jy + 1
+
     return (
         np.diagflat([-rx] * (size - 1), 1)
         + np.diagflat([-ry] * (size - Ix - 1), Ix + 1)
@@ -412,14 +411,14 @@ class RD_2D_1st_Order(Reaction_Diffusion_2D):
     def __init__(self, Ds, N, T, Lx, Ix, Ly, Jy, boundary_condition=Neumann_Boundary_2D, cx=0, cy=0):
         super().__init__(Ds, N, T, Lx, Ix, Ly, Jy)
         BCs = [boundary_condition(rx, ry, Ix, Jy, cx, cy, self.Δx, self.Δy) for rx, ry in zip(self.rxs, self.rys)]
-        self.As = [
+        As = [
             Crank_Nicolson_Euler_Forward_2D_A(rx, ry, Ix, Jy) + BC1 for rx, ry, (BC1, _) in zip(self.rxs, self.rys, BCs)
         ]
-        self.A_facts = [sp.sparse.linalg.factorized(A) for A in self.As]
-        self.Bs = [
+        self.A_facts = [sp.sparse.linalg.factorized(A) for A in As]
+        Bs = [
             Crank_Nicolson_Euler_Forward_2D_B(rx, ry, Ix, Jy) - BC1 for rx, ry, (BC1, _) in zip(self.rxs, self.rys, BCs)
         ]
-        self.Bcsrs = [sp.sparse.csr_matrix(B) for B in self.Bs]
+        self.Bcsrs = [sp.sparse.csr_matrix(B) for B in Bs]
 
         self.BC2s = [BC2 for _, BC2 in BCs]
 

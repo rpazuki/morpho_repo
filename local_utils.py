@@ -6,6 +6,7 @@ import numpy as np
 import sys
 sys.path.append(f"{Path.home()}/morpho_repo/turing_codebase")
 from turing.utils import Simulation, create_dataset, second_order_derivatives, diffusion
+import matplotlib.pyplot as plt
 
 Pattern = namedtuple('Pattern', ['simulation', 't_star', 'x_size', 'y_size', 
                                  'c', 'c_xx', 'c_yy', 'c_t',
@@ -144,3 +145,18 @@ def creat_line(x_0, s):
     def line(alpha):
         return x_0 + alpha * s
     return line
+
+##########################################
+# Ploting Helpers
+def plot_n_im(arrays, titles=None, add_colorbar=True, figsize=(12, 8)):
+    cols = len(arrays)
+    if titles is not None:
+        assert len(titles) == cols, f"Titles len'{len(titles)}' is not equal to arrays '{col}'."
+    plt.figure(figsize=figsize)
+    for i in range(cols):
+        ax = plt.subplot(1, cols, i+1)
+        if titles is not None:
+            ax.set_title(titles[i])
+        plt.imshow(arrays[i])
+        if add_colorbar:
+            plt.colorbar()

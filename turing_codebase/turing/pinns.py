@@ -35,6 +35,7 @@ def train(
     print_callback=None,
     printer=default_printer,
     epoch_callback=None,
+    stop_condition=None,
 ):
     if print_interval > 0:
         start_time = time.time()
@@ -63,6 +64,13 @@ def train(
             printer(f"#       Early stop at {epoch}             ")
             printer("############################################")
             return loss_samples[:index, :]
+        if stop_condition is not None:
+            condition = stop_condition(epoch, loss_samples, index)
+            if condition:
+                printer("############################################")
+                printer(f"#       Early stopby condition at {epoch}  ")
+                printer("############################################")
+                return loss_samples[:index, :]
         ###########################################
         if print_interval > 0 and epoch % print_interval == 0:
             printer(f"Time taken: {(time.time() - start_time):.2f}s")
@@ -75,12 +83,7 @@ def train(
 
 class NN_base(tf.Module):
     def __init__(self, dtype=tf.float32, **kwargs):
-        """A dense Neural Net that is specified by layers argument.
-
-        layers: input, dense layers and outputs dimensions
-        lb    : An array of minimums of inputs (lower bounds)
-        ub    : An array of maximums of inputs (upper bounds)
-        """
+        """Base class for all neural networks."""
         super().__init__(**kwargs)
         self.dtype = dtype
         self.__version__ = 0.1
@@ -333,6 +336,32 @@ class NN(NN_base):
         """
         partials = [tape.gradient(outputs[i], inputs) for i in range(len(outputs))]
         return partials
+
+
+class NN_Scaled(NN):
+    def build(self):
+        """Create the state of the layers (weights)"""
+        self.weights = []
+        self.scales = []
+        self.biases = []
+        for i in range(0, self.num_layers - 1):
+            W = self.xavier_init(size=[self.layers[i], self.layers[i + 1]])
+            a = tf.Variable(tf.ones([1, self.layers[i + 1]], dtype=self.dtype), dtype=self.dtype)
+            b = tf.Variable(tf.zeros([1, self.layers[i + 1]], dtype=self.dtype), dtype=self.dtype)
+            self.weights.append(W)
+            self.scales.append(a)
+            self.biases.append(b)
+
+    @tf.function
+    def net(self, inputs):
+        # Map the inputs to the range [-1, 1]
+        H = 2.0 * (inputs - self.lb) / (self.ub - self.lb) - 1.0
+        for W, a, b in zip(self.weights, self.scales, self.biases):
+            outputs = tf.matmul(H, W)
+            outputs = a * outputs + b
+            H = tf.tanh(outputs)
+
+        return outputs
 
 
 class NN2(NN):

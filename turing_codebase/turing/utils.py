@@ -433,6 +433,83 @@ def create_dataset_mask(
     return ret
 
 
+def create_dataset_multi_nodes(
+    data,
+    t_star,
+    N,
+    T,
+    L,
+    training_data_size,
+    pde_data_size,
+    signal_to_noise=0,
+    shuffle=True,
+    derivatives=None,
+    idx_data=None,
+):
+    x_size = data.shape[1]
+    y_size = data.shape[2]
+    x_domain = L * np.linspace(0, 1, x_size)
+    y_domain = L * np.linspace(0, 1, y_size)
+
+    X, Y = np.meshgrid(x_domain, y_domain, sparse=False, indexing="ij")
+    XX = np.tile(X.flatten(), T)  # N x T
+    YY = np.tile(Y.flatten(), T)  # N x T
+    TT = np.repeat(t_star[-T:], N)  # T x N
+
+    # UU = np.einsum("cijk->ckij", data[:, :, :, -T:])
+    UU = np.einsum("cxyk->ckxy", data[:, :, :, -T:])
+    UU = np.array([UU[i, :, :, :].flatten() for i in range(UU.shape[0])])  # c , N x T
+
+    if derivatives is not None:
+        dds = np.array(
+            [
+                [np.einsum("ijk->kij", d[i, :, :, -T:]).flatten() for d in derivatives]
+                for i in range(derivatives[0].shape[0])
+            ]
+        )
+    ##########################################
+    # Including noise
+    if signal_to_noise > 0:
+        signal_amp_u = (np.max(UU) - np.min(UU)) / 2.0
+        sigma_u = signal_amp_u * signal_to_noise
+    # Observed data
+    if idx_data is None:
+        if shuffle:
+            idx_data = np.random.choice(N * T, training_data_size, replace=False)
+        else:
+            idx_data = list(range(training_data_size))
+    # PDE colocations
+    if shuffle:
+        idx_pde = np.random.choice(N * T, pde_data_size, replace=False)
+    else:
+        idx_pde = list(range(pde_data_size))
+
+    # Lower/Upper bounds
+    lb, ub = lower_upper_bounds(np.c_[XX, YY, TT])
+    if derivatives is not None:
+        derivatives_lb_ub = [lower_upper_bounds(dd.T) for dd in dds]
+
+    ret = {
+        "obs_input": np.c_[XX[idx_data], YY[idx_data], TT[idx_data]],
+        "obs_output": np.vstack([UU[i, idx_data] for i in range(UU.shape[0])]).T,
+        "pde": np.c_[XX[idx_pde], YY[idx_pde], TT[idx_pde]],
+        "lb": lb,
+        "ub": ub,
+    }
+    if derivatives is not None:
+        ret = {
+            **ret,
+            **{
+                "ders": dds[:, :, idx_data],
+                "derivatives_lb_ub": derivatives_lb_ub,
+            },
+        }
+    if signal_to_noise > 0:
+        ret["obs_output"] += sigma_u * np.random.randn(len(idx_data))
+
+    return ret
+
+
 def create_dataset_multi_nodes_mask(
     data,
     mask,
@@ -445,6 +522,8 @@ def create_dataset_multi_nodes_mask(
     signal_to_noise=0,
     shuffle=True,
 ):
+    """This is the old one and might not work"""
+
     x_size = data.shape[1]
     y_size = data.shape[2]
     x_domain = L * np.linspace(0, 1, x_size)
