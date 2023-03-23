@@ -36,6 +36,7 @@ def train(
     printer=default_printer,
     epoch_callback=None,
     stop_condition=None,
+    return_index=False,
 ):
     if print_interval > 0:
         start_time = time.time()
@@ -63,14 +64,20 @@ def train(
             printer("############################################")
             printer(f"#       Early stop at {epoch}             ")
             printer("############################################")
-            return loss_samples[:index, :]
+            if return_index:
+                return loss_samples[:index, :], index
+            else:
+                return loss_samples[:index, :]
         if stop_condition is not None:
             condition = stop_condition(epoch, loss_samples, index)
             if condition:
                 printer("############################################")
                 printer(f"#       Early stopby condition at {epoch}  ")
                 printer("############################################")
-                return loss_samples[:index, :]
+                if return_index:
+                    return loss_samples[:index, :], index
+                else:
+                    return loss_samples[:index, :]
         ###########################################
         if print_interval > 0 and epoch % print_interval == 0:
             printer(f"Time taken: {(time.time() - start_time):.2f}s")
@@ -78,7 +85,10 @@ def train(
         if epoch % loss_sample_interval == 0:
             index += 1
 
-    return loss_samples[:index, :]
+    if return_index:
+        return loss_samples[:index, :], index
+    else:
+        return loss_samples[:index, :]
 
 
 class NN_base(tf.Module):
@@ -339,6 +349,11 @@ class NN(NN_base):
 
 
 class NN_Scaled(NN):
+    def __init__(self, layers, lb, ub, dtype=tf.float32, **kwargs):
+        super().__init__(layers, lb, ub, dtype, **kwargs)
+        laplacian_kernel = np.array([[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]])
+        self.laplacian_kernel = tf.constant(laplacian_kernel[:, :, np.newaxis, np.newaxis], dtype=dtype)
+
     def build(self):
         """Create the state of the layers (weights)"""
         self.weights = []
@@ -362,6 +377,10 @@ class NN_Scaled(NN):
             H = tf.tanh(outputs)
 
         return outputs
+
+    def derivative_fields(self, obs, padding="SAME", data_format="NHWC"):
+        res = tf.nn.conv2d(obs, self.laplacian_kernel, strides=[1], padding=padding, data_format=data_format)
+        return res
 
 
 class NN2(NN):
