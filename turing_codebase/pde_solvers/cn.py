@@ -41,13 +41,13 @@ def Crank_Nicolson_Euler_Forward_1D_A(rx, Ix):
     Args:
         rx (float): D Δt / 2 Δx^2
                       Δt = T/N
-                      Δx = L/J
-        Ix (int): x direction Ix + 1 discrete space points number
+                      Δx = L / (Ix-1)
+        Ix (int): x direction Ix discrete space points number
 
     Returns:
-        (Ix+1)*(Ix+1) matrix: a matrix that must be added to A (LHS) and subtracted from B (RHS)
+        Ix*Ix matrix: a matrix that must be added to A (LHS) and subtracted from B (RHS)
     """
-    return np.diagflat([-rx] * Ix, -1) + np.diagflat([1.0 + 2.0 * rx] * (Ix + 1)) + np.diagflat([-rx] * Ix, 1)
+    return np.diagflat([-rx] * (Ix - 1), -1) + np.diagflat([1.0 + 2.0 * rx] * Ix) + np.diagflat([-rx] * (Ix - 1), 1)
 
 
 def Crank_Nicolson_Euler_Forward_1D_B(rx, Ix):
@@ -56,13 +56,13 @@ def Crank_Nicolson_Euler_Forward_1D_B(rx, Ix):
     Args:
         rx (float): D Δt / 2 Δx^2
                       Δt = T/N
-                      Δx = L/J
-        Ix (int): x direction Ix + 1 discrete space points number
+                      Δx = L / (Ix-1)
+        Ix (int): x direction Ix discrete space points number
 
     Returns:
-        (Ix+1)*(Ix+1) matrix: a matrix that must be added to A (LHS) and subtracted from B (RHS)
+        Ix*Ix matrix: a matrix that must be added to A (LHS) and subtracted from B (RHS)
     """
-    return np.diagflat([rx] * Ix, -1) + np.diagflat([1.0 - 2.0 * rx] * (Ix + 1)) + np.diagflat([rx] * Ix, 1)
+    return np.diagflat([rx] * (Ix - 1), -1) + np.diagflat([1.0 - 2.0 * rx] * Ix) + np.diagflat([rx] * (Ix - 1), 1)
 
 
 def Neumann_Boundary_1D(rx, Ix, c=0.0, delta_x=0):
@@ -71,22 +71,22 @@ def Neumann_Boundary_1D(rx, Ix, c=0.0, delta_x=0):
     Args:
         rx (float): D Δt / 2 Δx^2
                       Δt = T/N
-                      Δx = L/J
-        Ix (int): x direction Ix + 1 discrete space points number
+                      Δx = L / (Ix-1)
+        Ix (int): x direction Ix discrete space points number
         c  (float): constant flux
         delta_x (float)
 
     Returns:
-        ((Ix+1)*(Ix+1) matrix, (Ix+1) vector:
+        (IxIx) matrix, (Ix+1) vector:
          a matrix that must be added to A (LHS) and subtracted from B (RHS) and
          a correction on the RHS
     """
     if c == 0:
-        return (np.diagflat([-rx] + [0] * (Ix - 1) + [-rx]), None)
+        return (np.diagflat([-rx] + [0] * (Ix - 2) + [-rx]), None)
     else:
         return (
-            np.diagflat([-rx] + [0] * (Ix - 1) + [-rx]),
-            np.array([-2.0 * rx * c] + [0] * (Ix - 1) + [2.0 * rx * c]) * delta_x,
+            np.diagflat([-rx] + [0] * (Ix - 2) + [-rx]),
+            np.array([-2.0 * rx * c] + [0] * (Ix - 2) + [2.0 * rx * c]) * delta_x,
         )
 
 
@@ -96,20 +96,20 @@ def Diritchlet_Boundary_1D(rx, Ix, c=0.0, delta_x=0):
     Args:
         rx (float): D Δt / 2 Δx^2
                       Δt = T/N
-                      Δx = L/J
-        Ix (int): x direction discrete space points number
+                      Δx = L / (Ix-1)
+        Ix (int): x direction Ix discrete space points number
         c  (float): constant value at
         delta_x (float)
 
     Returns:
-        ((Ix+1)*(Ix+1) matrix, (Ix+1) vector:
+        (Ix*Ix) matrix, (Ix+1) vector:
          a matrix that must be added to A (LHS) and subtracted from B (RHS) and
          a correction on the RHS
     """
     if c == 0.0:
         return (0.0, None)
     else:
-        return (0.0, np.array([2.0 * rx * c] + [0] * (Ix - 1) + [2.0 * rx * c]))  # np.diagflat( [0 for i in range(J)] )
+        return (0.0, np.array([2.0 * rx * c] + [0] * (Ix - 2) + [2.0 * rx * c]))  # np.diagflat( [0 for i in range(J)] )
 
 
 def Periodic_Boundary_1D(rx, Ix, c=0.0, delta_x=0):
@@ -118,13 +118,13 @@ def Periodic_Boundary_1D(rx, Ix, c=0.0, delta_x=0):
     Args:
         rx (float): D Δt / 2 Δx^2
                       Δt = T/N
-                      Δx = L/J
-        Ix (int): x direction discrete space points number
+                      Δx = L / (Ix-1)
+        Ix (int): x direction Ix discrete space points number
         c  (float): None
         delta_x (float)
 
     Returns:
-        ((Ix+1)*(Ix+1) matrix, (Ix+1) vector:
+        (Ix*Ix) matrix, (Ix) vector:
          a matrix that must be added to A (LHS) and subtracted from B (RHS) and
          a correction on the RHS
     """
@@ -146,7 +146,7 @@ class Reaction_Diffusion_1D:
         self.L = L
         self.Ix = Ix
         self.Δt = T / N
-        self.Δx = L / Ix
+        self.Δx = L / (Ix - 1)
         self.rxs = [D * self.Δt / (2.0 * self.Δx**2) for D in self.Ds]
         self.nodes = len(Ds)
 
@@ -256,30 +256,33 @@ class RD_1D_2nd_Order(Reaction_Diffusion_1D):
 #################################################################
 #   2D
 def Crank_Nicolson_Euler_Forward_2D_A(rx, ry, Ix, Jy):
-    size = Ix * Jy + Ix + Jy + 1
+    size = Ix * Jy
 
     return (
         np.diagflat([-rx] * (size - 1), 1)
-        + np.diagflat([-ry] * (size - Ix - 1), Ix + 1)
+        + np.diagflat([-ry] * (size - Ix), Ix)
         + np.diagflat([1.0 + 2.0 * rx + 2.0 * ry] * size)
-        + np.diagflat([-ry] * (size - Ix - 1), -Ix - 1)
+        + np.diagflat([-ry] * (size - Ix), -Ix)
         + np.diagflat([-rx] * (size - 1), -1)
     )
 
 
 def Crank_Nicolson_Euler_Forward_2D_B(rx, ry, Ix, Jy):
-    size = Ix * Jy + Ix + Jy + 1
+    size = Ix * Jy
     return (
         np.diagflat([rx] * (size - 1), 1)
-        + np.diagflat([ry] * (size - Ix - 1), Ix + 1)
+        + np.diagflat([ry] * (size - Ix), Ix)
         + np.diagflat([1.0 - 2.0 * rx - 2.0 * ry] * size)
-        + np.diagflat([ry] * (size - Ix - 1), -Ix - 1)
+        + np.diagflat([ry] * (size - Ix), -Ix)
         + np.diagflat([rx] * (size - 1), -1)
     )
 
 
 def first_order_term_corrections(rx, Ix, Jy):
-    return np.diagflat(([0] * Ix + [rx]) * (Jy) + [0] * Ix, 1) + np.diagflat(([0] * Ix + [rx]) * (Jy) + [0] * Ix, 1).T
+    return (
+        np.diagflat(([0] * (Ix - 1) + [rx]) * (Jy - 1) + [0] * (Ix - 1), 1)
+        + np.diagflat(([0] * (Ix - 1) + [rx]) * (Jy - 1) + [0] * (Ix - 1), 1).T
+    )
 
 
 def Neumann_Boundary_2D(rx, ry, Ix, Jy, cx=0.0, cy=0.0, delta_x=0, delta_y=0):
@@ -291,31 +294,29 @@ def Neumann_Boundary_2D(rx, ry, Ix, Jy, cx=0.0, cy=0.0, delta_x=0, delta_y=0):
         rx (float): D Δt / 2 Δx^2
         ry (float): D Δt / 2 Δx^2
                     Δt = T/N
-                    Δx = Lx/Ix
-                    Δy = Ly/Jy
-        Ix (int): x direction Ix+1 discrete space points number
-        Jy (int): y direction Jy+1 discrete space points number
+                    Δx = Lx/(Ix-1)
+                    Δy = Ly/(Jy-1)
+        Ix (int): x direction Ix discrete space points number
+        Jy (int): y direction Jy discrete space points number
 
     Returns:
-        (IxJy + Ix + Jy)*(IxJy  + Ix + Jy) matrix: A matrix that must be added to A and subtracted from B
+        (IxJy)*(IxJy) matrix: A matrix that must be added to A and subtracted from B
     """
-    size = Ix * Jy + Ix + Jy + 1
+    size = Ix * Jy
     if cx == 0 and cy == 0:
         return (
-            np.diagflat([-rx] * (Jy + 1) + [0] * (size - 2 * Jy - 2) + [-rx] * (Jy + 1))
-            + np.diagflat(([-ry] + [0] * (Ix - 1) + [-ry]) * (Jy + 1))
+            np.diagflat([-rx] * Jy + [0] * (size - 2 * Jy) + [-rx] * Jy)
+            + np.diagflat(([-ry] + [0] * (Ix - 2) + [-ry]) * Jy)
             + first_order_term_corrections(rx, Ix, Jy),
             None,
         )
     else:
         return (
-            np.diagflat([-rx] * (Jy + 1) + [0] * (size - 2 * Jy - 2) + [-rx] * (Jy + 1))
-            + np.diagflat(([-ry] + [0] * (Ix - 1) + [-ry]) * (Jy + 1))
+            np.diagflat([-rx] * Jy + [0] * (size - 2 * Jy) + [-rx] * Jy)
+            + np.diagflat(([-ry] + [0] * (Ix - 2) + [-ry]) * Jy)
             + first_order_term_corrections(rx, Ix, Jy),
-            np.array(
-                [-2.0 * rx * cx * delta_x] * (Jy + 1) + [0] * (size - 2 * Jy - 2) + [2.0 * rx * cx * delta_x] * (Jy + 1)
-            )
-            + np.array(([-2.0 * ry * cy * delta_y] + [0] * (Ix - 1) + [2.0 * ry * cy * delta_y]) * (Jy + 1)),
+            np.array([-2.0 * rx * cx * delta_x] * Jy + [0] * (size - 2 * Jy) + [2.0 * rx * cx * delta_x] * Jy)
+            + np.array(([-2.0 * ry * cy * delta_y] + [0] * (Ix - 2) + [2.0 * ry * cy * delta_y]) * Jy),
         )
 
 
@@ -326,31 +327,29 @@ def Diritchlet_Boundary_2D(rx, ry, Ix, Jy, cx=0.0, cy=0.0, delta_x=0, delta_y=0)
         rx (float): D Δt / 2 Δx^2
         ry (float): D Δt / 2 Δx^2
                     Δt = T/N
-                    Δx = Lx/I
-                    Δy = Ly/J
-        Ix (int): x direction Ix+1 discrete space points number
-        Jy (int): y direction Jy+1 discrete space points number
+                    Δx = Lx/(Ix-1)
+                    Δy = Ly/(Jy-1)
+        Ix (int): x direction Ix discrete space points number
+        Jy (int): y direction Jy discrete space points number
 
     Returns:
-        (IxJy + Ix + Jy)*(IxJy  + Ix + Jy) matrix: A matrix that must be added to A and subtracted from B
+        (IxJy)*(IxJy) matrix: A matrix that must be added to A and subtracted from B
     """
-    size = Ix * Jy + Ix + Jy + 1
+    size = Ix * Jy
     if cx == 0.0 and cy == 0.0:
         return (
-            np.diagflat([-rx * cx] * (Jy + 1) + [0] * (size - 2 * Jy - 2) + [-rx * cx] * (Jy + 1))
-            + np.diagflat(([-ry * cy] + [0] * (Ix - 1) + [-ry * cy]) * (Jy + 1))
+            np.diagflat([-rx * cx] * Jy + [0] * (size - 2 * Jy) + [-rx * cx] * Jy)
+            + np.diagflat(([-ry * cy] + [0] * (Ix - 2) + [-ry * cy]) * Jy)
             + first_order_term_corrections(rx, Ix, Jy),
             None,
         )
     else:
         return (
-            np.diagflat([-rx * cx] * (Jy + 1) + [0] * (size - 2 * Jy - 2) + [-rx * cx] * (Jy + 1))
-            + np.diagflat(([-ry * cy] + [0] * (Ix - 1) + [-ry * cy]) * (Jy + 1))
+            np.diagflat([-rx * cx] * Jy + [0] * (size - 2 * Jy) + [-rx * cx] * Jy)
+            + np.diagflat(([-ry * cy] + [0] * (Ix - 2) + [-ry * cy]) * Jy)
             + first_order_term_corrections(rx, Ix, Jy),
-            np.array(
-                [2.0 * rx * cx * delta_x] * (Jy + 1) + [0] * (size - 2 * Jy - 2) + [2.0 * rx * cx * delta_x] * (Jy + 1)
-            )
-            + np.array(([2.0 * ry * cy * delta_y] + [0] * (Ix - 1) + [2.0 * ry * cy * delta_y]) * (Jy + 1)),
+            np.array([2.0 * rx * cx * delta_x] * Jy + [0] * (size - 2 * Jy) + [2.0 * rx * cx * delta_x] * Jy)
+            + np.array(([2.0 * ry * cy * delta_y] + [0] * (Ix - 2) + [2.0 * ry * cy * delta_y]) * Jy),
         )
 
 
@@ -361,20 +360,20 @@ def Periodic_Boundary_2D(rx, ry, Ix, Jy, cx=0.0, cy=0.0, delta_x=0, delta_y=0):
         rx (float): D Δt / 2 Δx^2
         ry (float): D Δt / 2 Δx^2
                     Δt = T/N
-                    Δx = Lx/I
-                    Δy = Ly/J
-        Ix (int): x direction Ix+1 discrete space points number
-        Jy (int): y direction Jy+1 discrete space points number
+                    Δx = Lx/(Ix-1)
+                    Δy = Ly/(Jy-1)
+        Ix (int): x direction Ix discrete space points number
+        Jy (int): y direction Jy discrete space points number
 
     Returns:
-        (IxJy + Ix + Jy)*(IxJy  + Ix + Jy) matrix: A matrix that must be added to A and subtracted from B
+        (IxJy)*(IxJy) matrix: A matrix that must be added to A and subtracted from B
     """
     return (
         (
-            np.diagflat([-ry] * (Ix + 1), Ix * Jy + Jy)
-            + np.diagflat(([-rx] + [0] * Ix) * (Jy) + [-rx], Ix)
-            + np.diagflat([-ry] * (Ix + 1), Ix * Jy + Jy).T
-            + np.diagflat(([-rx] + [0] * Ix) * (Jy) + [-rx], Ix).T
+            np.diagflat([-ry] * Ix, Ix * Jy - Ix)
+            + np.diagflat(([-rx] + [0] * (Ix - 1)) * (Jy - 1) + [-rx], (Ix - 1))
+            + np.diagflat([-ry] * Ix, Ix * Jy - Ix).T
+            + np.diagflat(([-rx] + [0] * (Ix - 1)) * (Jy - 1) + [-rx], (Ix - 1)).T
             + first_order_term_corrections(rx, Ix, Jy)
         ),
         None,
@@ -400,8 +399,8 @@ class Reaction_Diffusion_2D:
         self.Ly = Ly
         self.Jy = Jy
         self.Δt = T / N
-        self.Δx = Lx / Ix
-        self.Δy = Ly / Jy
+        self.Δx = Lx / (Ix - 1)
+        self.Δy = Ly / (Jy - 1)
         self.rxs = [D * self.Δt / (2.0 * self.Δx**2) for D in self.Ds]
         self.rys = [D * self.Δt / (2.0 * self.Δy**2) for D in self.Ds]
         self.nodes = len(Ds)
