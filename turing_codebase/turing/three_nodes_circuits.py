@@ -31,7 +31,7 @@ def create_circuit_3954(
 
 
 def create_circuit_3708(
-    n, b_A, mu_A, V_A, K_BA, K_AB, K_AC, b_B, mu_B, V_B, K_CA, K_BC, b_C, mu_C, V_C, K_CB, K_CC, single_arg=False
+    n, b_A, mu_A, V_A, K_AB, K_AC, b_B, mu_B, V_B, K_BA, K_BC, b_C, mu_C, V_C, K_CA, K_CB, K_CC, single_arg=False
 ):
     def circuit_3708(A, B, C):
         fA_v = b_A + V_A * act(B, K_BA, n) * inh(C, K_CA, n) - mu_A * A
