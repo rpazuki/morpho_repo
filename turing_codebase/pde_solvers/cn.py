@@ -384,6 +384,68 @@ class Reaction_Diffusion_2D:
     def __init__(
         self,
         Ds,
+        delta_t,
+        Lx,
+        Ix,
+        Ly,
+        Jy,
+    ):
+        self.Ds = Ds
+        self.Lx = Lx
+        self.Ix = Ix
+        self.Ly = Ly
+        self.Jy = Jy
+        self.Δt = delta_t
+        self.Δx = Lx / (Ix - 1)
+        self.Δy = Ly / (Jy - 1)
+        self.rxs = [D * self.Δt / (2.0 * self.Δx**2) for D in self.Ds]
+        self.rys = [D * self.Δt / (2.0 * self.Δy**2) for D in self.Ds]
+        self.nodes = len(Ds)
+
+
+class RD_2D_1st_Order(Reaction_Diffusion_2D):
+    def __init__(self, Ds, delta_t, Lx, Ix, Ly, Jy, boundary_condition=Neumann_Boundary_2D, cx=0, cy=0):
+        super().__init__(Ds, delta_t, Lx, Ix, Ly, Jy)
+        BCs = [boundary_condition(rx, ry, Ix, Jy, cx, cy, self.Δx, self.Δy) for rx, ry in zip(self.rxs, self.rys)]
+        As = [
+            Crank_Nicolson_Euler_Forward_2D_A(rx, ry, Ix, Jy) + BC1 for rx, ry, (BC1, _) in zip(self.rxs, self.rys, BCs)
+        ]
+        self.A_facts = [sp.sparse.linalg.factorized(A) for A in As]
+        Bs = [
+            Crank_Nicolson_Euler_Forward_2D_B(rx, ry, Ix, Jy) - BC1 for rx, ry, (BC1, _) in zip(self.rxs, self.rys, BCs)
+        ]
+        self.Bcsrs = [sp.sparse.csr_matrix(B) for B in Bs]
+
+        self.BC2s = [BC2 for _, BC2 in BCs]
+
+    def integrate(self, Us, kinetics, N, record_steps=1):
+        """Solve the AU(n+1) = BU(n) + Δtf(n)
+
+        Args:
+            Us (list of JxJ matrices): Initial state
+            kinetics (a vectorised function): Functions that calculate the kinetics terms.
+                                          The function signatures must be f(U1, U2, .. Un) for
+                                          a model with n node.
+            record_steps (int, optional): The length of time steps to record a result. Defaults to 1.
+
+        Returns:
+            _type_: _description_
+        """
+        assert self.nodes == len(Us), f"There must be '{self.nodes}' matrices in Us."
+        Us_ret = np.zeros(
+            (
+                N // record_steps,
+                self.nodes,
+            )
+            + Us[0].shape
+        )
+        return integrate_1st_order(N, self.Δt, Us_ret, self.A_facts, self.Bcsrs, Us, kinetics, self.BC2s, record_steps)
+
+
+class Reaction_Diffusion_2D_old:
+    def __init__(
+        self,
+        Ds,
         N,
         T,
         Lx,
@@ -406,7 +468,7 @@ class Reaction_Diffusion_2D:
         self.nodes = len(Ds)
 
 
-class RD_2D_1st_Order(Reaction_Diffusion_2D):
+class RD_2D_1st_Order_old(Reaction_Diffusion_2D_old):
     def __init__(self, Ds, N, T, Lx, Ix, Ly, Jy, boundary_condition=Neumann_Boundary_2D, cx=0, cy=0):
         super().__init__(Ds, N, T, Lx, Ix, Ly, Jy)
         BCs = [boundary_condition(rx, ry, Ix, Jy, cx, cy, self.Δx, self.Δy) for rx, ry in zip(self.rxs, self.rys)]
