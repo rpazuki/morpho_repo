@@ -24,3 +24,5 @@ solver/Brusselator.gif
 solver/Brusselator2.gif
 solver/Brusselator3.gif
 solver/Brusselator_strips.gif
+pytorch/plots/**
+Three_nodes_models/circuit_3954/final/backup/PINN_final_estimates_plot_*.ipynb
