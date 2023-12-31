@@ -27,4 +27,8 @@ solver/Brusselator_strips.gif
 pytorch/plots/**
 Three_nodes_models/circuit_3954/final/backup/PINN_final_estimates_plot_*.ipynb
 pytorch/Laplace_eq_outputs/**
+**/*.pbz2
+pytorch_3_nodes/outputs/*
+pytorch_3_nodes_unidentifiable_problematic/outputs/*
+pytorch/**/*.npy
 
