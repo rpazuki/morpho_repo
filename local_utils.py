@@ -148,7 +148,7 @@ def creat_line(x_0, s):
 
 ##########################################
 # Ploting Helpers
-def plot_n_im(arrays, titles=None, add_colorbar=True, figsize=(12, 8)):
+def plot_n_im(arrays, titles=None, add_colorbar=True, figsize=(12, 8), fraction=0.15, shrink=1.0):
     cols = len(arrays)
     if titles is not None:
         assert len(titles) == cols, f"Titles len'{len(titles)}' is not equal to arrays '{col}'."
@@ -157,6 +157,6 @@ def plot_n_im(arrays, titles=None, add_colorbar=True, figsize=(12, 8)):
         ax = plt.subplot(1, cols, i+1)
         if titles is not None:
             ax.set_title(titles[i])
-        plt.imshow(arrays[i])
+        img = plt.imshow(arrays[i])
         if add_colorbar:
-            plt.colorbar()
+            plt.colorbar(img, fraction=fraction, shrink=shrink)

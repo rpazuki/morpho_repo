@@ -47,6 +47,10 @@ train_settings = namedtuple('train_settings',
 #     total_loss.backward()
 #     optimizer.step() 
 
+def Boundary_gradient(outputs, x_inputs):
+    dx  = torch.autograd.grad(outputs, x_inputs, torch.ones_like(outputs), create_graph=True)[0]# computes dy/dx    
+    return dx
+
 def Laplacian(outputs, xy_inputs):
     dxy  = torch.autograd.grad(outputs, xy_inputs, torch.ones_like(outputs), create_graph=True)[0]# computes dy/dx
     dx, dy = dxy[:,0], dxy[:,1]

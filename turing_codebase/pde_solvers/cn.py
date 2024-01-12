@@ -292,7 +292,7 @@ def Neumann_Boundary_2D(rx, ry, Ix, Jy, cx=0.0, cy=0.0, delta_x=0, delta_y=0):
 
     Args:
         rx (float): D Δt / 2 Δx^2
-        ry (float): D Δt / 2 Δx^2
+        ry (float): D Δt / 2 Δy^2
                     Δt = T/N
                     Δx = Lx/(Ix-1)
                     Δy = Ly/(Jy-1)
@@ -325,7 +325,7 @@ def Diritchlet_Boundary_2D(rx, ry, Ix, Jy, cx=0.0, cy=0.0, delta_x=0, delta_y=0)
 
     Args:
         rx (float): D Δt / 2 Δx^2
-        ry (float): D Δt / 2 Δx^2
+        ry (float): D Δt / 2 Δy^2
                     Δt = T/N
                     Δx = Lx/(Ix-1)
                     Δy = Ly/(Jy-1)
@@ -358,7 +358,7 @@ def Periodic_Boundary_2D(rx, ry, Ix, Jy, cx=0.0, cy=0.0, delta_x=0, delta_y=0):
 
     Args:
         rx (float): D Δt / 2 Δx^2
-        ry (float): D Δt / 2 Δx^2
+        ry (float): D Δt / 2 Δy^2
                     Δt = T/N
                     Δx = Lx/(Ix-1)
                     Δy = Ly/(Jy-1)

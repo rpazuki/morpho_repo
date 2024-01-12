@@ -127,6 +127,16 @@ def creat_topology(params, kinetics, A, B, C, threshold = 0.001):
      b_A, mu_A, V_A, K_AA, K_AB, K_AC,
      b_B, mu_B, V_B, K_BA, K_BC,
      b_C, mu_C, V_C, K_CB, K_CC) = tuple(params.values())    
+    return creat_topology_by_params(kinetics, A, B, C,
+                             D_A, D_B, n, 
+                             b_A, mu_A, V_A, K_AA, K_AB, K_AC,
+                             b_B, mu_B, V_B, K_BA, K_BC,
+                             b_C, mu_C, V_C, K_CB, K_CC, threshold)
+def creat_topology_by_params(kinetics, A, B, C,
+                             D_A, D_B, n, 
+                             b_A, mu_A, V_A, K_AA, K_AB, K_AC,
+                             b_B, mu_B, V_B, K_BA, K_BC,
+                             b_C, mu_C, V_C, K_CB, K_CC, threshold = 0.001):    
     ###############################################################
     A_act_AA = lambda A, K_AA: act(A, K_AA, 4)
     A_inh_BA = lambda B, K_BA: inh(B, K_BA, 4)
