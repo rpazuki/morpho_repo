@@ -1,5 +1,3 @@
-# from .cn import integrate
-
 __author__ = """Roozbeh H. Pazuki"""
-__email__ = "roozbeh.pazuki@imperial.ac.uk"
+__email__ = "rpazuki@gmail.com"
 __version__ = "0.0.1"

@@ -1,3 +1,13 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+###############################################
+#  Copyright (c) 2024 Roozbeh H. Pazuki
+#
+#  Email: rpazuki@gmail.com
+#         roozbeh.pazuki@imperial.ac.uk
+#
+#
 import numpy as np
 import scipy as sp
 

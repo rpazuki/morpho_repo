@@ -3,12 +3,12 @@ from scipy.optimize import fsolve
 
 def act(x, K, n):
     """Activatrion"""
-    return 1 / (1 + (K / x) ** n)
+    return x**n / (x**n + K**n)
 
 
 def inh(x, K, n):
     """Inhibition"""
-    return 1 / (1 + (x / K) ** n)
+    return K**n / (K**n + x** n)
 
 
 def create_circuit_3954(
