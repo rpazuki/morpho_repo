@@ -1,3 +1,5 @@
 solver/ filter=lfs diff=lfs merge=lfs -text
 solver/Brusselator3.gif filter=lfs diff=lfs merge=lfs -text
 Described_experiments/NewSet/direction_sims_dill_data.pkl filter=lfs diff=lfs merge=lfs -text
+Described_experiments/saved_models/pinn_2D_Koch_Meinhardt_5_test.pkl filter=lfs diff=lfs merge=lfs -text
+Described_experiments/saved_models_old/ filter=lfs diff=lfs merge=lfs -text
