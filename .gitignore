@@ -14,4 +14,21 @@ turing_codebase/.vscode/settings.json
 growth/saved_models/**
 growth/saved_models/**/*
 growth/saved_models/*.pkl
+**/*.pkl
 20201026 JM204_Cell2_stim_uropod_Export_CellLight_OpTool.mat
+solver/turring_weird.gif
+solver/turring_weird2.gif
+solver/turring_weird3.gif
+solver/turring_weird4.gif
+solver/Brusselator.gif
+solver/Brusselator2.gif
+solver/Brusselator3.gif
+solver/Brusselator_strips.gif
+pytorch/plots/**
+Three_nodes_models/circuit_3954/final/backup/PINN_final_estimates_plot_*.ipynb
+pytorch/Laplace_eq_outputs/**
+**/*.pbz2
+pytorch_3_nodes/outputs/*
+pytorch_3_nodes_unidentifiable_problematic/outputs/*
+pytorch/**/*.npy
+
